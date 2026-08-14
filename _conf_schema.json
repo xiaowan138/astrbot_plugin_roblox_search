@@ -1,0 +1,13 @@
+{
+    "search_white_list": {
+        "type": "list",
+        "description": "群白名单（群号列表）。留空 = 所有群均可使用全部查询功能；填写后仅白名单内的群可使用查询功能（菜单始终可用），私聊不受限制。",
+        "hint": "例：[\"123456789\", \"987654321\"]",
+        "default": []
+    },
+    "allow_no_slash_command": {
+        "type": "bool",
+        "description": "是否支持无斜杠触发命令（如直接发送「用户名搜索 Roblox」即可触发，无需加 / 前缀）",
+        "default": true
+    }
+}
