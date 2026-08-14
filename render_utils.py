@@ -1,7 +1,9 @@
 """
-render_utils.py —— 菜单图片渲染（沿用原 nonebot_plugin_roblox_search/render_utils.py）
+render_utils.py —— 菜单图片渲染
 
-通过 PIL 将功能菜单渲染为精美 PNG 图片，含中文字体自动检测（Windows/Linux）。
+通过 PIL 将功能菜单渲染为 PNG 图片。优先使用插件自带的 Noto Sans SC 字体
+（OFL 开源协议，随插件分发），避免在无中文字体的 Docker/Linux 环境回退到
+PIL 默认字体而显示方格子。
 """
 
 import io
@@ -16,7 +18,12 @@ def get_font(size=14):
     if cache_key in FONT_CACHE:
         return FONT_CACHE[cache_key]
 
+    # 插件内置字体优先（fonts/ 目录随插件分发）
+    _plugin_dir = os.path.dirname(os.path.abspath(__file__))
+    _internal_font = os.path.join(_plugin_dir, "fonts", "NotoSansSC-Regular.otf")
+
     font_paths = [
+        _internal_font,
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -87,31 +94,9 @@ def get_font(size=14):
     return ImageFont.load_default()
 
 
-def split_text(text, font, max_width):
-    lines = []
-    for paragraph in text.split('\n'):
-        if not paragraph:
-            lines.append('')
-            continue
-        current_line = ''
-        for char in paragraph:
-            test_line = current_line + char
-            bbox = font.getbbox(test_line)
-            width = bbox[2] - bbox[0]
-            if width <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = char
-        if current_line:
-            lines.append(current_line)
-    return lines
-
-
 async def menu_to_image() -> bytes:
     font = get_font(16)
-    title_font = get_font(24)
+    title_font = get_font(26)
     small_font = get_font(12)
 
     content_width = 600
@@ -119,26 +104,26 @@ async def menu_to_image() -> bytes:
     line_height = font.getbbox("A")[3] - font.getbbox("A")[1] + 8
 
     menu_items = [
-        ("🔍 用户查询", [
-            ("用户名搜索 [用户名]", "通过用户名查询用户完整资料"),
-            ("用户ID搜索 [数字ID]", "直接UID查询用户"),
+        ("用户查询", [
+            ("/用户名搜索 [用户名]", "按用户名查询用户完整资料"),
+            ("/用户ID搜索 [数字ID]", "按用户ID直查用户资料"),
         ]),
-        ("🏢 群组查询", [
-            ("群组名搜索 [群组名]", "模糊搜索群组并展示详情"),
-            ("群组ID搜索 [数字ID]", "群组ID精准查询、职位列表"),
+        ("群组查询", [
+            ("/群组名搜索 [群组名]", "模糊搜索群组并展示详情"),
+            ("/群组ID搜索 [数字ID]", "群组详情与职位列表"),
         ]),
-        ("🎮 游戏查询", [
-            ("游戏名搜索 [游戏名]", "搜索游戏、在线人数、访问量"),
-            ("游戏ID搜索 [数字ID]", "游戏详情+公开服务器列表"),
+        ("游戏查询", [
+            ("/游戏名搜索 [游戏名]", "搜索游戏、在线人数、访问量"),
+            ("/游戏ID搜索 [数字ID]", "游戏详情与公开服务器"),
         ]),
-        ("👥 社交查询", [
-            ("获取好友列表 [用户ID]", "读取用户前10位好友"),
-            ("获取粉丝列表 [用户ID]", "读取前10位粉丝"),
-            ("获取关注列表 [用户ID]", "读取前10位关注"),
+        ("社交查询", [
+            ("/获取好友列表 [用户ID]", "读取用户前10位好友"),
+            ("/获取粉丝列表 [用户ID]", "读取用户前10位粉丝"),
+            ("/获取关注列表 [用户ID]", "读取用户前10位关注"),
         ]),
     ]
 
-    image_height = padding * 2 + len(menu_items) * 100 + 100
+    image_height = padding * 2 + len(menu_items) * 110 + 130
     img = Image.new('RGB', (content_width, image_height), color=(15, 18, 25))
     draw = ImageDraw.Draw(img)
 
@@ -152,7 +137,7 @@ async def menu_to_image() -> bytes:
         grad_draw.line([(0, i), (content_width, i)], fill=(50, 120, 255, alpha // 3))
     img.paste(gradient, (0, 0), gradient)
 
-    title_text = "🎮 Roblox 查询机器人"
+    title_text = "Roblox 全功能查询"
     bbox = title_font.getbbox(title_text)
     title_width = bbox[2] - bbox[0]
     draw.text(((content_width - title_width) // 2, padding), title_text,
@@ -161,12 +146,12 @@ async def menu_to_image() -> bytes:
     subtitle_text = "功能菜单"
     bbox = font.getbbox(subtitle_text)
     sub_width = bbox[2] - bbox[0]
-    draw.text(((content_width - sub_width) // 2, padding + 45), subtitle_text,
+    draw.text(((content_width - sub_width) // 2, padding + 50), subtitle_text,
               font=font, fill=(150, 180, 220))
 
-    y = padding + 90
+    y = padding + 100
     draw.line([(padding, y), (content_width - padding, y)], fill=(40, 80, 150), width=1)
-    y += 20
+    y += 25
 
     for category, items in menu_items:
         cat_bbox = font.getbbox(category)
@@ -178,19 +163,16 @@ async def menu_to_image() -> bytes:
             (padding + cat_width + 10, y + cat_bbox[3] - cat_bbox[1] + 5)
         ], radius=8, outline=(80, 180, 255), width=1)
 
-        y += 35
+        y += 40
 
         for cmd, desc in items:
-            cmd_bbox = font.getbbox(cmd)
             draw.text((padding + 15, y), cmd, font=font, fill=(200, 215, 240))
-            draw.text((padding + 200, y), desc, font=small_font, fill=(120, 140, 170))
+            draw.text((padding + 220, y), desc, font=small_font, fill=(120, 140, 170))
             y += line_height
 
-        y += 15
+        y += 18
 
-    __version__ = "1.0.0"
-
-    footer_text = f"Powered by Roblox 全功能查询插件 · 版本 {__version__}"
+    footer_text = "Roblox 全功能查询插件 v1.1.0"
     bbox = small_font.getbbox(footer_text)
     footer_width = bbox[2] - bbox[0]
     draw.text(((content_width - footer_width) // 2, image_height - 30),

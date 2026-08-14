@@ -9,6 +9,7 @@ roblox_api.py —— Roblox 查询 API 封装（迁移自 nonebot_plugin_roblox_
 """
 
 import asyncio
+import urllib.parse
 
 import httpx
 
@@ -106,7 +107,6 @@ async def http_post(url: str, data=None, retries: int = MAX_RETRIES):
 
 async def search_user(username: str):
     """通过用户名搜索用户，返回第一个匹配的用户 dict 或 None"""
-    import urllib.parse
     encoded_username = urllib.parse.quote(username)
     url = f"https://users.rotunnel.com/v1/users/search?keyword={encoded_username}"
     try:
@@ -206,8 +206,9 @@ async def get_headshot_url(user_id: int):
 # ============ 群组相关 API ============
 
 async def search_group(name: str):
-    """按名称模糊搜索群组"""
-    url = f"https://groups.rotunnel.com/v1/groups/search?keyword={name}&limit=10"
+    """按名称模糊搜索群组（关键词做 URL 编码，支持中文/空格）"""
+    encoded = urllib.parse.quote(name)
+    url = f"https://groups.rotunnel.com/v1/groups/search?keyword={encoded}&limit=10"
     return await http_get(url)
 
 
@@ -244,8 +245,15 @@ async def get_group_icon(gid: int):
 # ============ 游戏相关 API ============
 
 async def search_game(name: str):
-    """按名称搜索游戏"""
-    url = f"https://games.rotunnel.com/v1/games/list?accessFilter=2&keyword={name}&limit=10&sortOrder=Relevance"
+    """按名称搜索游戏（关键词做 URL 编码，支持中文/空格）"""
+    encoded = urllib.parse.quote(name)
+    url = f"https://games.rotunnel.com/v1/games/list?accessFilter=2&keyword={encoded}&limit=10&sortOrder=Relevance"
+    return await http_get(url)
+
+
+async def get_game_info_by_universe(universe_id: int):
+    """按游戏ID(universeId)获取游戏详情，兼容部分用户输入的是游戏 ID 而非地点 ID 的情况"""
+    url = f"https://games.rotunnel.com/v1/games?universeIds={universe_id}"
     return await http_get(url)
 
 

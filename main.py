@@ -1,8 +1,12 @@
 """
 main.py —— Roblox 全功能查询插件（AstrBot 版）
 
-由 NoneBot2 插件 nonebot_plugin_roblox_search (v1.3.5) 迁移而来，
-仅替换框架层（NoneBot → AstrBot），全部查询功能、API、输出格式保持不变。
+由 NoneBot2 插件 nonebot_plugin_roblox_search (v1.3.5) 迁移并增强而来。
+在保留原插件全部查询功能的基础上：
+- 重新设计了输出格式（纯文本 + 中文标点排版，无 Markdown 敏感字符，跨平台安全）
+- 修复原插件 bug：群组/游戏名搜索未做 URL 编码（中文/空格关键词会失败）、
+  游戏 ID 查询不兼容 universeId、同步 requests 阻塞事件循环等
+- 增强：认证徽章/会员标识、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
 
 功能命令（均可带 / 前缀触发，无斜杠触发可在配置中关闭）：
     菜单 / 帮助 / menu          查看功能菜单（图片）
@@ -43,6 +47,7 @@ from .roblox_api import (
     get_friends,
     get_game_icon,
     get_game_info,
+    get_game_info_by_universe,
     get_game_servers,
     get_group_icon,
     get_group_info,
@@ -59,6 +64,16 @@ from .render_utils import menu_to_image
 
 # 非白名单群的拒绝提示（与原插件一致）
 WHITELIST_MSG = "此群未获得账号所有者的允许，未开放此群白名单，暂时不开使用，请联系账号所有者"
+
+# 单条文本输出最大长度（QQ/Telegram 等平台消息上限约 4000+，留出余量）
+MAX_TEXT_LEN = 3500
+
+
+def _truncate(text: str, max_len: int = MAX_TEXT_LEN) -> str:
+    """超长文本截断保护，防止超出平台消息长度限制"""
+    if len(text) > max_len:
+        return text[:max_len] + "\n...（内容过长，已截断）"
+    return text
 
 
 def _parse_param(event: AstrMessageEvent, keyword: str) -> str:
@@ -95,7 +110,7 @@ def _calc_age(created_dt):
     created_date = created_dt.strftime("%Y-%m-%d")
     delta = relativedelta(datetime.now(), created_dt)
     total_days = (datetime.now() - created_dt).days
-    age_info = f"{delta.years}年{delta.months}月{delta.days}天（共{total_days}天）"
+    age_info = f"{delta.years}年{delta.months}个月{delta.days}天（共{total_days}天）"
     return created_date, age_info
 
 
@@ -223,7 +238,7 @@ class RobloxSearchPlugin(Star):
 
     async def _user_query(self, event: AstrMessageEvent, user_id: int, source: str):
         """用户详情查询（用户名搜索 / 用户ID搜索共用）"""
-        yield event.plain_result("稍等，正在查询Roblox用户信息...")
+        yield event.plain_result("正在查询用户信息，请稍候...")
         total_start = time.time()
         try:
             details = await get_user_details(user_id)
@@ -263,36 +278,47 @@ class RobloxSearchPlugin(Star):
             online_status, location = _parse_presence(status)
             created_date, age_info = _calc_age(_parse_date(created_raw))
 
-            title = "📄 Roblox 用户信息查询" if source == "用户名搜索" else "📄 Roblox 用户信息查询（ID）"
-            output = f"{title}\n\n"
-            output += f"👤 用户名：{raw_name}\n"
-            output += f"🏷️ 展示名：{display_name}\n"
-            output += f"🆔 用户ID：{user_id}\n"
+            output = "【Roblox 用户信息】\n"
+            output += f"用户名：{raw_name}\n"
+            if display_name and display_name != raw_name:
+                output += f"展示名：{display_name}\n"
+            output += f"用户ID：{user_id}\n"
             if created_date:
-                output += f"📅 注册日期：{created_date}\n"
-                output += f"⏳ 注册时长：{age_info}\n"
-            output += f"👥 好友：{friend_count} | 关注：{following_count} | 粉丝：{follower_count}\n"
-            output += f"🟢 在线状态：{online_status}\n"
-            output += f"📍 当前位置：{location}\n"
-            output += f"🚫 账号封禁：{'是' if is_banned else '否'}\n"
+                output += f"注册日期：{created_date}\n"
+                output += f"注册时长：{age_info}\n"
+            output += f"好友：{friend_count} ｜ 关注：{following_count} ｜ 粉丝：{follower_count}\n"
+            output += f"在线状态：{online_status}\n"
+            output += f"当前位置：{location}\n"
+            output += f"账号封禁：{'是' if is_banned else '否'}\n"
+            if "hasVerifiedBadge" in details:
+                output += f"已认证：{'是' if details.get("hasVerifiedBadge") else '否'}\n"
+            if "isPremium" in details:
+                output += f"会员：{'是' if details.get("isPremium") else '否'}\n"
+
             if description:
-                output += f"\n📝 用户简介：\n{description}\n"
+                output += "\n【用户简介】\n"
+                output += description[:500]
+                if len(description) > 500:
+                    output += "......"
+                output += "\n"
+
             if groups:
-                output += f"\n🏠 已加入群组(前5个)：\n"
+                output += "\n【已加入群组（前5个）】\n"
                 for idx, group in enumerate(groups[:5], 1):
                     group_name = group.get("group", {}).get("name", "未知")
                     role = group.get("role", {}).get("name", "未知")
                     gid = group.get("group", {}).get("id", 0)
-                    output += f"{idx}) {group_name}｜职位:{role}\n"
-                    output += f"   群组ID：{gid}\n"
+                    output += f"{idx}. {group_name}（职位：{role}，ID：{gid}）\n"
 
-            # 头像框 + 形象图在前，文本在后（与原插件顺序一致）
+            output = _truncate(output)
+
+            # 头像框 + 形象图在前，文本在后
             chain = []
             for url in (headshot_url, avatar_url):
                 path = await _download_to_temp(url) if url else None
                 if path:
                     chain.append(Image.fromFileSystem(path))
-            chain.append(Plain("\u200b" + output))
+            chain.append(Plain(output))
             yield event.chain_result(chain)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -312,7 +338,7 @@ class RobloxSearchPlugin(Star):
         if not name:
             yield event.plain_result("请输入群组名，例：/群组名搜索 Roblox")
             return
-        yield event.plain_result("稍等，正在搜索群组...")
+        yield event.plain_result("正在搜索群组，请稍候...")
         try:
             search_result = await search_group(name)
             groups = search_result.get("data", []) if search_result else []
@@ -332,23 +358,35 @@ class RobloxSearchPlugin(Star):
             member_count = group_info.get("memberCount", 0)
             owner = group_info.get("owner", {}) or {}
             owner_name = owner.get("name", "未知")
+            owner_id = owner.get("id")
+            owner_text = f"{owner_name}（ID：{owner_id}）" if owner_id else owner_name
             is_public = group_info.get("publicEntryAllowed", False)
             create_dt = _parse_date(group_info.get("created", ""))
 
-            output = f"🏠 Roblox 群组搜索结果\n\n"
-            output += f"🆔 群组ID：{gid}\n"
-            output += f"📛 群组名：{name_out}\n"
-            output += f"👥 成员数量：{member_count:,}\n"
-            output += f"👤 群主：{owner_name}\n"
-            output += f"📅 创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"🌐 是否公开：{'是' if is_public else '否'}\n\n"
-            output += f"📝 群组描述：\n{description[:300]}{'......' if len(description) > 300 else ''}"
+            output = "【Roblox 群组搜索】\n"
+            output += f"群组名：{name_out}\n"
+            output += f"群组ID：{gid}\n"
+            output += f"成员数量：{member_count:,}\n"
+            output += f"群主：{owner_text}\n"
+            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"是否公开：{'是' if is_public else '否'}\n"
+            output += f"\n【群组描述】\n{description[:300]}{'......' if len(description) > 300 else ''}"
+
+            if len(groups) > 1:
+                output += f"\n\n【更多匹配（共{len(groups)}个）】\n"
+                for cand in groups[1:4]:
+                    cid = cand.get("id", 0)
+                    cname = cand.get("name", "未知")
+                    output += f"· {cname}（ID：{cid}）\n"
+                output += "发送 /群组ID搜索 [ID] 查看详情"
+
+            output = _truncate(output)
 
             chain = []
             icon_path = await _download_to_temp(icon_url) if icon_url else None
             if icon_path:
                 chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain("\u200b" + output))
+            chain.append(Plain(output))
             yield event.chain_result(chain)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -365,7 +403,7 @@ class RobloxSearchPlugin(Star):
             yield event.plain_result("请输入有效的群组ID（纯数字），例：/群组ID搜索 123456")
             return
         gid = int(gid_str)
-        yield event.plain_result("稍等，正在查询群组信息...")
+        yield event.plain_result("正在查询群组信息，请稍候...")
         try:
             group_info, roles, icon_url = await asyncio.gather(
                 get_group_info(gid), get_group_roles(gid), get_group_icon(gid),
@@ -382,30 +420,34 @@ class RobloxSearchPlugin(Star):
             member_count = group_info.get("memberCount", 0)
             owner = group_info.get("owner", {}) or {}
             owner_name = owner.get("name", "未知")
+            owner_id = owner.get("id")
+            owner_text = f"{owner_name}（ID：{owner_id}）" if owner_id else owner_name
             is_public = group_info.get("publicEntryAllowed", False)
             create_dt = _parse_date(group_info.get("created", ""))
 
-            output = f"🏠 Roblox 群组详情查询\n\n"
-            output += f"🆔 群组ID：{gid}\n"
-            output += f"📛 群组名：{name_out}\n"
-            output += f"👥 成员数量：{member_count:,}\n"
-            output += f"👤 群主：{owner_name}\n"
-            output += f"📅 创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"🌐 是否公开：{'是' if is_public else '否'}\n\n"
-            output += f"📝 群组描述：\n{description[:200]}{'......' if len(description) > 200 else ''}"
+            output = "【Roblox 群组详情】\n"
+            output += f"群组名：{name_out}\n"
+            output += f"群组ID：{gid}\n"
+            output += f"成员数量：{member_count:,}\n"
+            output += f"群主：{owner_text}\n"
+            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"是否公开：{'是' if is_public else '否'}\n"
+            output += f"\n【群组描述】\n{description[:200]}{'......' if len(description) > 200 else ''}"
 
             if roles:
-                output += f"\n\n💼 职位列表（前5个）：\n"
+                output += "\n\n【职位列表（前5个）】\n"
                 for idx, role in enumerate(roles[:5], 1):
                     role_name = role.get("name") or role.get("displayName") or "未知"
                     role_count = role.get("memberCount") or role.get("count") or 0
-                    output += f"{idx}) {role_name}｜成员数:{role_count}\n"
+                    output += f"{idx}. {role_name}（成员数：{role_count}）\n"
+
+            output = _truncate(output)
 
             chain = []
             icon_path = await _download_to_temp(icon_url) if icon_url else None
             if icon_path:
                 chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain("\u200b" + output))
+            chain.append(Plain(output))
             yield event.chain_result(chain)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -423,7 +465,7 @@ class RobloxSearchPlugin(Star):
         if not name:
             yield event.plain_result("请输入游戏名，例：/游戏名搜索 Adopt Me")
             return
-        yield event.plain_result("稍等，正在搜索游戏...")
+        yield event.plain_result("正在搜索游戏，请稍候...")
         try:
             search_result = await search_game(name)
             games = search_result.get("data", []) if search_result else []
@@ -449,26 +491,42 @@ class RobloxSearchPlugin(Star):
             playing = game_detail.get("playing", 0)
             visits = game_detail.get("visits", 0)
             favorites = game_detail.get("favorites", 0)
+            likes = game_detail.get("likes")
+            genre = game_detail.get("genre")
             create_dt = _parse_date(game_detail.get("created", ""))
             update_dt = _parse_date(game_detail.get("updated", ""))
 
-            output = f"🎮 Roblox 游戏搜索结果\n\n"
-            output += f"🆔 游戏ID：{game_id}\n"
-            output += f"📍 地点ID：{place_id}\n"
-            output += f"📛 游戏名：{name_out}\n"
-            output += f"👤 开发者：{creator_name}\n"
-            output += f"👥 当前游玩：{playing:,}\n"
-            output += f"👁️ 总访问量：{visits:,}\n"
-            output += f"❤️ 收藏数：{favorites:,}\n"
-            output += f"📅 创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"🔄 更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n\n"
-            output += f"📝 游戏描述：\n{description[:300]}{'......' if len(description) > 300 else ''}"
+            output = "【Roblox 游戏搜索】\n"
+            output += f"游戏名：{name_out}\n"
+            output += f"游戏ID：{game_id}\n"
+            output += f"地点ID：{place_id}\n"
+            output += f"开发者：{creator_name}\n"
+            output += f"当前游玩：{playing:,}\n"
+            output += f"总访问量：{visits:,}\n"
+            output += f"收藏数：{favorites:,}\n"
+            if likes is not None:
+                output += f"点赞数：{likes:,}\n"
+            if genre:
+                output += f"类型：{genre}\n"
+            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n"
+            output += f"\n【游戏描述】\n{description[:300]}{'......' if len(description) > 300 else ''}"
+
+            if len(games) > 1:
+                output += f"\n\n【更多匹配（共{len(games)}个）】\n"
+                for cand in games[1:4]:
+                    cid = cand.get("id", 0)
+                    cname = cand.get("name", "未知")
+                    output += f"· {cname}（ID：{cid}）\n"
+                output += "发送 /游戏ID搜索 [ID] 查看详情"
+
+            output = _truncate(output)
 
             chain = []
             icon_path = await _download_to_temp(icon_url) if icon_url else None
             if icon_path:
                 chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain("\u200b" + output))
+            chain.append(Plain(output))
             yield event.chain_result(chain)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -485,7 +543,7 @@ class RobloxSearchPlugin(Star):
             yield event.plain_result("请输入有效的游戏ID（纯数字），例：/游戏ID搜索 292439477")
             return
         gid = int(gid_str)
-        yield event.plain_result("稍等，正在查询游戏信息...")
+        yield event.plain_result("正在查询游戏信息，请稍候...")
         try:
             game_info, icon_url, servers = await asyncio.gather(
                 get_game_info(gid), get_game_icon(gid), get_game_servers(gid),
@@ -495,6 +553,12 @@ class RobloxSearchPlugin(Star):
             servers = [] if isinstance(servers, Exception) else (servers or [])
 
             game_data = game_info.get("data", []) if isinstance(game_info, dict) else []
+            # 兼容：用户输入的可能不是地点ID而是游戏ID(universeId)
+            if not game_data:
+                universe_info = await get_game_info_by_universe(gid)
+                if isinstance(universe_info, dict):
+                    game_info = universe_info
+                    game_data = universe_info.get("data", [])
             game_detail = game_data[0] if game_data else {}
             if not game_detail:
                 yield event.plain_result("未找到该游戏，请检查游戏ID是否正确！")
@@ -507,34 +571,42 @@ class RobloxSearchPlugin(Star):
             playing = game_detail.get("playing", 0)
             visits = game_detail.get("visits", 0)
             favorites = game_detail.get("favorites", 0)
+            likes = game_detail.get("likes")
+            genre = game_detail.get("genre")
             create_dt = _parse_date(game_detail.get("created", ""))
             update_dt = _parse_date(game_detail.get("updated", ""))
 
-            output = f"🎮 Roblox 游戏详情查询\n\n"
-            output += f"🆔 游戏ID：{gid}\n"
-            output += f"📛 游戏名：{name_out}\n"
-            output += f"👤 开发者：{creator_name}\n"
-            output += f"👥 当前游玩：{playing:,}\n"
-            output += f"👁️ 总访问量：{visits:,}\n"
-            output += f"❤️ 收藏数：{favorites:,}\n"
-            output += f"📅 创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"🔄 更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n\n"
-            output += f"📝 游戏描述：\n{description[:200]}{'......' if len(description) > 200 else ''}"
+            output = "【Roblox 游戏详情】\n"
+            output += f"游戏名：{name_out}\n"
+            output += f"游戏ID：{gid}\n"
+            output += f"开发者：{creator_name}\n"
+            output += f"当前游玩：{playing:,}\n"
+            output += f"总访问量：{visits:,}\n"
+            output += f"收藏数：{favorites:,}\n"
+            if likes is not None:
+                output += f"点赞数：{likes:,}\n"
+            if genre:
+                output += f"类型：{genre}\n"
+            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n"
+            output += f"\n【游戏描述】\n{description[:200]}{'......' if len(description) > 200 else ''}"
 
             if servers:
-                output += f"\n\n🖥️ 公开服务器（前3个）：\n"
+                output += "\n\n【公开服务器（前3个）】\n"
                 for idx, server in enumerate(servers[:3], 1):
                     server_id = server.get("id", "未知")
                     s_playing = server.get("playing", 0)
                     max_players = server.get("maxPlayers", "?")
                     ping = server.get("ping", "?")
-                    output += f"{idx}) {server_id}｜{s_playing}/{max_players}｜{ping}ms\n"
+                    output += f"{idx}. {server_id}（{s_playing}/{max_players}，{ping}ms）\n"
+
+            output = _truncate(output)
 
             chain = []
             icon_path = await _download_to_temp(icon_url) if icon_url else None
             if icon_path:
                 chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain("\u200b" + output))
+            chain.append(Plain(output))
             yield event.chain_result(chain)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -552,19 +624,19 @@ class RobloxSearchPlugin(Star):
             yield event.plain_result(f"请输入有效的用户ID（纯数字），例：/{keyword} 123456789")
             return
         uid = int(uid_str)
-        yield event.plain_result(f"稍等，正在获取{title}...")
+        yield event.plain_result(f"正在获取{title}，请稍候...")
         try:
             items = await fetch(uid, 10)
             if not items:
                 yield event.plain_result("未找到该用户的相关列表或用户ID不存在！")
                 return
-            output = f"👥 用户ID {uid} 的{title}（前10个）\n\n"
+            output = f"【{title}】用户ID {uid}（前10个）\n"
             for idx, item in enumerate(items, 1):
                 name = item.get("name", "未知")
                 display_name = item.get("displayName", "未知")
                 iid = item.get("id", 0)
-                output += f"{idx}. {name}（{display_name}）\n🆔 ID：{iid}\n\n"
-            yield event.plain_result("\u200b" + output.strip())
+                output += f"{idx}. {name}（{display_name}）｜ ID：{iid}\n"
+            yield event.plain_result(_truncate(output))
         except Exception as e:
             logger.error(traceback.format_exc())
             yield event.plain_result(f"获取失败：{str(e)}")
