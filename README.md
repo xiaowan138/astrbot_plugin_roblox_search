@@ -73,3 +73,8 @@ Roblox 平台综合查询工具，支持**用户 / 游戏 / 群组 / 好友粉�
 - **第三方代理接口可能随时变化**（2025-11 实测）：游戏名搜索（`games/list`）、公开服务器列表（`servers/Public`）、粉丝/关注列表接口目前在代理上不可用（404/403/401），会按“未找到/不可用”优雅降级；游戏图标参数已按代理要求修正为 `universeIds`，群组图标尺寸修正为 `420x420`。若某功能突然不可用，通常是代理侧问题，可关注原作者仓库的 `replace_url.py` 用途（代理域名更换）。
 - `fonts/` 目录内的 Noto Sans SC 字体遵循 [OFL 开源协议](fonts/OFL-LICENSE.txt)，可自由使用与再分发。
 - 本项目仅供学习交流，请遵守 Roblox 与相关 API 的使用条款。
+
+## 贡献者
+
+- [MrMao](https://github.com/maoyyds-cn) —— 原 NoneBot2 插件 [nonebot_plugin_roblox_search](https://github.com/maoyyds-cn/nonebot_plugin_roblox_search) 作者
+- [xiaowan138](https://github.com/xiaowan138) —— AstrBot 迁移与功能增强维护
