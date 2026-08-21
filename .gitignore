@@ -3,3 +3,4 @@ __pycache__/
 .zcode/
 .DS_Store
 *.log
+data/

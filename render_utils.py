@@ -123,7 +123,14 @@ async def menu_to_image() -> bytes:
         ]),
     ]
 
-    image_height = padding * 2 + len(menu_items) * 110 + 130
+    # 按实际行高动态计算总高度，避免字体度量变化导致内容溢出/压到页脚
+    category_heights = [
+        40 + len(items) * line_height + 18
+        for _, items in menu_items
+    ]
+    total_items_height = sum(category_heights)
+    image_height = padding * 2 + 100 + 25 + total_items_height + 30
+
     img = Image.new('RGB', (content_width, image_height), color=(15, 18, 25))
     draw = ImageDraw.Draw(img)
 
@@ -172,7 +179,7 @@ async def menu_to_image() -> bytes:
 
         y += 18
 
-    footer_text = "Roblox 全功能查询插件 v1.1.0"
+    footer_text = "Roblox 全功能查询插件 v1.3.0"
     bbox = small_font.getbbox(footer_text)
     footer_width = bbox[2] - bbox[0]
     draw.text(((content_width - footer_width) // 2, image_height - 30),

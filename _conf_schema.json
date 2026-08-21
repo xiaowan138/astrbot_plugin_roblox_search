@@ -9,5 +9,11 @@
         "type": "bool",
         "description": "是否支持无斜杠触发命令（如直接发送「用户名搜索 Roblox」即可触发，无需加 / 前缀）",
         "default": true
+    },
+    "platform_type": {
+        "type": "string",
+        "description": "机器人平台类型（影响图片发送策略）。auto 自动识别；onebot 适用于 NapCat/Lagrange 等 OneBot 实现；qq_official 适用于 QQ 官方机器人。QQ 官方平台一条消息只能带一张图，用户查询会自动只发一张形象图，避免图片被拆散成多条。",
+        "hint": "可选值：auto（默认，推荐）/ onebot / qq_official",
+        "default": "auto"
     }
 }
