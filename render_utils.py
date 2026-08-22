@@ -4,13 +4,33 @@ render_utils.py —— 菜单图片渲染
 通过 PIL 将功能菜单渲染为 PNG 图片。优先使用插件自带的 Noto Sans SC 字体
 （OFL 开源协议，随插件分发），避免在无中文字体的 Docker/Linux 环境回退到
 PIL 默认字体而显示方格子。
+
+渲染与字体探测（含 fc-list 子进程调用）为同步阻塞操作，统一放到线程池
+执行（asyncio.to_thread），不阻塞事件循环。
 """
 
+import asyncio
 import io
 import os
 from PIL import Image, ImageDraw, ImageFont
 
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_CACHE = {}
+_VERSION = ""
+
+
+def _load_version() -> str:
+    """从 metadata.yaml 读取插件版本号（仅首次读取，失败返回空串）"""
+    global _VERSION
+    if _VERSION:
+        return _VERSION
+    try:
+        import yaml
+        with open(os.path.join(_PLUGIN_DIR, "metadata.yaml"), encoding="utf-8") as f:
+            _VERSION = str((yaml.safe_load(f) or {}).get("version", "")).strip()
+    except Exception:
+        pass
+    return _VERSION
 
 
 def get_font(size=14):
@@ -19,8 +39,7 @@ def get_font(size=14):
         return FONT_CACHE[cache_key]
 
     # 插件内置字体优先（fonts/ 目录随插件分发）
-    _plugin_dir = os.path.dirname(os.path.abspath(__file__))
-    _internal_font = os.path.join(_plugin_dir, "fonts", "NotoSansSC-Regular.otf")
+    _internal_font = os.path.join(_PLUGIN_DIR, "fonts", "NotoSansSC-Regular.otf")
 
     font_paths = [
         _internal_font,
@@ -95,6 +114,11 @@ def get_font(size=14):
 
 
 async def menu_to_image() -> bytes:
+    """生成菜单图片（渲染在线程池执行，避免阻塞事件循环）"""
+    return await asyncio.to_thread(_render_menu_sync)
+
+
+def _render_menu_sync() -> bytes:
     font = get_font(16)
     title_font = get_font(26)
     small_font = get_font(12)
@@ -114,12 +138,13 @@ async def menu_to_image() -> bytes:
         ]),
         ("游戏查询", [
             ("/游戏名搜索 [游戏名]", "搜索游戏、在线人数、访问量"),
-            ("/游戏ID搜索 [数字ID]", "游戏详情与公开服务器"),
+            ("/游戏ID搜索 [数字ID]", "游戏详情（兼容地点ID/游戏ID）"),
         ]),
         ("社交查询", [
-            ("/获取好友列表 [用户ID]", "读取用户前10位好友"),
-            ("/获取粉丝列表 [用户ID]", "读取用户前10位粉丝"),
-            ("/获取关注列表 [用户ID]", "读取用户前10位关注"),
+            ("/获取好友列表 [ID] [页码]", "读取用户好友（每页10个）"),
+            ("/获取粉丝列表 [ID] [页码]", "读取用户粉丝（每页10个）"),
+            ("/获取关注列表 [ID] [页码]", "读取用户关注（每页10个）"),
+            ("/获取徽章列表 [用户ID]", "读取用户获得的官方徽章"),
         ]),
     ]
 
@@ -179,7 +204,8 @@ async def menu_to_image() -> bytes:
 
         y += 18
 
-    footer_text = "Roblox 全功能查询插件 v1.3.0"
+    version = _load_version()
+    footer_text = f"Roblox 全功能查询插件 {version}".rstrip()
     bbox = small_font.getbbox(footer_text)
     footer_width = bbox[2] - bbox[0]
     draw.text(((content_width - footer_width) // 2, image_height - 30),

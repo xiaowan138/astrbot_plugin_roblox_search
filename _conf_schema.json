@@ -12,8 +12,20 @@
     },
     "platform_type": {
         "type": "string",
-        "description": "机器人平台类型（影响图片发送策略）。auto 自动识别；onebot 适用于 NapCat/Lagrange 等 OneBot 实现；qq_official 适用于 QQ 官方机器人。QQ 官方平台一条消息只能带一张图，用户查询会自动只发一张形象图，避免图片被拆散成多条。",
+        "description": "机器人平台类型（影响图片与消息发送策略）。auto（推荐）按每条消息的来源平台自动识别，同一 AstrBot 同时接入 QQ 官方机器人 + OneBot（NapCat/Lagrange 等）也无需切换；onebot / qq_official 为手动指定。QQ 官方平台：一条消息只发一张图、省略“正在查询...”中间提示（官方对消息条数/频率有限制）。",
         "hint": "可选值：auto（默认，推荐）/ onebot / qq_official",
         "default": "auto"
+    },
+    "api_base_domain": {
+        "type": "string",
+        "description": "数据源代理域名（只填域名本身，不带 https:// 和路径）。默认 rotunnel.com；代理不可用时可换 roproxy.com 或自建反代域名。留空 = 使用默认值。",
+        "hint": "例：rotunnel.com / roproxy.com",
+        "default": "rotunnel.com"
+    },
+    "query_cooldown": {
+        "type": "int",
+        "description": "查询冷却：同一群内同一用户两次查询的最小间隔秒数，防止刷屏与触发接口限流；0 = 不限制。",
+        "hint": "例：5",
+        "default": 5
     }
 }

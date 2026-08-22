@@ -16,9 +16,10 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
     群组ID搜索 [数字ID]          查询群组详情与职位列表
     游戏名搜索 [游戏名]          搜索游戏、在线人数、访问量
     游戏ID搜索 [数字ID]          查询游戏详情与公开服务器列表
-    获取好友列表 [用户ID]        读取用户前10位好友
-    获取粉丝列表 [用户ID]        读取用户前10位粉丝
-    获取关注列表 [用户ID]        读取用户前10位关注
+    获取好友列表 [用户ID] [页码]  读取用户好友（每页10个，可翻页）
+    获取粉丝列表 [用户ID] [页码]  读取用户粉丝（每页10个）
+    获取关注列表 [用户ID] [页码]  读取用户关注（每页10个）
+    获取徽章列表 [用户ID]        读取用户获得的 Roblox 官方徽章
 """
 
 import asyncio
@@ -26,7 +27,7 @@ import os
 import tempfile
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dateutil.relativedelta import relativedelta
 
@@ -54,12 +55,14 @@ from .roblox_api import (
     get_group_info,
     get_group_roles,
     get_headshot_url,
+    get_user_badges,
     get_user_details,
     get_user_groups,
     get_user_presence,
     search_game,
     search_group,
     search_user,
+    set_base_domain,
 )
 from .render_utils import menu_to_image
 
@@ -119,39 +122,50 @@ def _parse_param(event: AstrMessageEvent, keyword: str) -> str:
 
 
 def _parse_date(s: str):
-    """解析 Roblox API 的 ISO 时间字符串，失败返回 None
+    """解析 Roblox API 的 ISO 时间字符串（统一视为 UTC），失败返回 None
 
     兼容：3/6 位小数秒、7 位及以上小数秒（旧版 Python 的 fromisoformat 不认）、
-    无小数秒、无 Z 后缀等变体。
+    无小数秒、无 Z 后缀等变体。返回带 UTC 时区信息的 datetime。
     """
     if not s:
         return None
     s = s.strip()
+    dt = None
     try:
-        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ")
+        dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ")
     except Exception:
-        pass
-    t = s.replace("Z", "")
-    try:
-        return datetime.fromisoformat(t)
-    except Exception:
-        if "." in t:
-            base, frac = t.split(".", 1)
-            frac = (frac + "000000")[:6]  # 截断到 6 位小数秒
-            try:
-                return datetime.fromisoformat(f"{base}.{frac}")
-            except Exception:
-                return None
-    return None
+        t = s.replace("Z", "")
+        try:
+            dt = datetime.fromisoformat(t)
+        except Exception:
+            if "." in t:
+                base, frac = t.split(".", 1)
+                frac = (frac + "000000")[:6]  # 截断到 6 位小数秒
+                try:
+                    dt = datetime.fromisoformat(f"{base}.{frac}")
+                except Exception:
+                    return None
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def _fmt_date(dt) -> str:
+    """UTC 时间转本地时区后格式化为日期字符串；无效返回“未知”"""
+    return dt.astimezone().strftime("%Y-%m-%d") if dt else "未知"
 
 
 def _calc_age(created_dt):
-    """计算注册时长，返回 (注册日期字符串, 时长描述)；传入 None 返回两个空串"""
+    """计算注册时长，返回 (注册日期字符串, 时长描述)；传入 None 返回两个空串。
+
+    日期按本地时区展示，时长用 UTC 对 UTC 计算，避免时区混用导致的偏差。
+    """
     if not created_dt:
         return "", ""
-    created_date = created_dt.strftime("%Y-%m-%d")
-    delta = relativedelta(datetime.now(), created_dt)
-    total_days = (datetime.now() - created_dt).days
+    now = datetime.now(timezone.utc)
+    created_date = created_dt.astimezone().strftime("%Y-%m-%d")
+    delta = relativedelta(now, created_dt)
+    total_days = (now - created_dt).days
     age_info = f"{delta.years}年{delta.months}个月{delta.days}天（共{total_days}天）"
     return created_date, age_info
 
@@ -213,6 +227,14 @@ class RobloxSearchPlugin(Star):
         self.allow_no_slash = bool(config.get("allow_no_slash_command", True))
         # 机器人平台类型：auto 自动识别 / onebot / qq_official
         self.platform_type = str(config.get("platform_type", "auto") or "auto").strip().lower()
+        # 数据源代理域名（默认 rotunnel.com，可换 roproxy.com / 自建反代）
+        set_base_domain(str(config.get("api_base_domain", "") or ""))
+        # 查询冷却：同一群内同一用户两次查询的最小间隔秒数，0 = 不限制
+        try:
+            self.cooldown = max(0, int(config.get("query_cooldown", 5) or 0))
+        except (TypeError, ValueError):
+            self.cooldown = 5
+        self._last_query: dict[tuple[str, str], float] = {}
         self._no_slash_handlers = {
             "用户名搜索": self.username_search,
             "用户ID搜索": self.user_id_search,
@@ -223,6 +245,7 @@ class RobloxSearchPlugin(Star):
             "获取好友列表": self.friends_list,
             "获取粉丝列表": self.followers_list,
             "获取关注列表": self.followings_list,
+            "获取徽章列表": self.badges_list,
         }
         if self.whitelist:
             logger.info(f"[Roblox全功能查询] 已加载群白名单: {self.whitelist}（仅白名单群可用查询功能）")
@@ -238,8 +261,40 @@ class RobloxSearchPlugin(Star):
             return True  # 未配置白名单 = 全开放
         return group_id in self.whitelist
 
+    def _check_cooldown(self, event: AstrMessageEvent) -> float:
+        """查询冷却检查；返回剩余冷却秒数（0 表示可查询），通过时记录本次时间。
+
+        按（群号/私聊, 发送者）维度限频，防止刷屏打爆代理接口触发 429。
+        """
+        if self.cooldown <= 0:
+            return 0
+        gid = str(event.get_group_id() or "") or "private"
+        uid = str(event.get_sender_id() or "") or "unknown"
+        key = (gid, uid)
+        now = time.time()
+        if len(self._last_query) > 4096:  # 防内存无限增长，顺带清理过期记录
+            cutoff = now - self.cooldown
+            self._last_query = {k: v for k, v in self._last_query.items() if v > cutoff}
+        remain = self.cooldown - (now - self._last_query.get(key, 0.0))
+        if remain > 0:
+            return remain
+        self._last_query[key] = now
+        return 0
+
+    def _gate(self, event: AstrMessageEvent) -> str | None:
+        """查询前置检查（白名单 + 冷却）；通过返回 None，否则返回提示文本"""
+        if not self._check_whitelist(event):
+            return WHITELIST_MSG
+        remain = self._check_cooldown(event)
+        if remain > 0:
+            return f"查询太频繁啦，请 {remain:.0f} 秒后再试～"
+        return None
+
     def _resolve_platform(self, event: AstrMessageEvent) -> str:
         """返回实际生效的平台类型：auto 时从事件自动识别，否则用配置值。
+
+        支持同一个 AstrBot 同时接入 QQ 官方机器人 + OneBot 等多种平台，
+        每条消息各自按来源平台适配，无需手动切换配置。
 
         QQ 官方机器人（qq_official / qq_official_webhook）一条消息只能带一张图，
         多图会被适配器强制拆成多条；其余平台（OneBot 等）默认按 onebot 处理。
@@ -247,9 +302,17 @@ class RobloxSearchPlugin(Star):
         if self.platform_type in ("onebot", "qq_official"):
             return self.platform_type
         name = (event.get_platform_name() or "").lower()
-        if name in ("qq_official", "qq_official_webhook"):
+        if "qq_official" in name or name in ("qqofficial", "qq_official_webhook"):
             return "qq_official"
         return "onebot"
+
+    def _show_progress(self, event: AstrMessageEvent) -> bool:
+        """是否发送“正在查询...”中间提示。
+
+        QQ 官方机器人平台对消息条数/频率有限制，省略中间提示，
+        只回最终结果一条，减少被限流的风险；其余平台保留提示改善体验。
+        """
+        return self._resolve_platform(event) != "qq_official"
 
     def _plain(self, event: AstrMessageEvent, text: str):
         """纯文本输出：强制关闭 Markdown 渲染，避免动态内容里的 # * | 等被平台解析"""
@@ -275,8 +338,9 @@ class RobloxSearchPlugin(Star):
     @filter.command("用户名搜索")
     async def username_search(self, event: AstrMessageEvent):
         '''根据用户名查询 Roblox 用户完整资料'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         username = _parse_param(event, "用户名搜索")
         if not username:
@@ -292,8 +356,9 @@ class RobloxSearchPlugin(Star):
     @filter.command("用户ID搜索")
     async def user_id_search(self, event: AstrMessageEvent):
         '''按用户ID查询 Roblox 用户完整资料'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         uid_str = _parse_param(event, "用户ID搜索")
         if not uid_str or not uid_str.isdigit():
@@ -305,7 +370,8 @@ class RobloxSearchPlugin(Star):
 
     async def _user_query(self, event: AstrMessageEvent, user_id: int, source: str):
         """用户详情查询（用户名搜索 / 用户ID搜索共用）"""
-        yield self._plain(event, "正在查询用户信息，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, "正在查询用户信息，请稍候...")
         total_start = time.time()
         try:
             details = await get_user_details(user_id)
@@ -362,8 +428,6 @@ class RobloxSearchPlugin(Star):
             output += f"账号封禁：{'是' if is_banned else '否'}\n"
             if "hasVerifiedBadge" in details:
                 output += f"已认证：{'是' if details.get("hasVerifiedBadge") else '否'}\n"
-            if "isPremium" in details:
-                output += f"会员：{'是' if details.get("isPremium") else '否'}\n"
 
             if description:
                 output += "\n【用户简介】\n"
@@ -389,11 +453,8 @@ class RobloxSearchPlugin(Star):
                 image_urls = [avatar_url]
             else:
                 image_urls = [headshot_url, avatar_url]
-            chain = []
-            for url in image_urls:
-                path = await _download_to_temp(url) if url else None
-                if path:
-                    chain.append(Image.fromFileSystem(path))
+            paths = await asyncio.gather(*(_download_to_temp(u) for u in image_urls if u))
+            chain = [Image.fromFileSystem(p) for p in paths if p]
             chain.append(Plain(output))
             yield self._chain(event, chain)
         except Exception as e:
@@ -407,14 +468,16 @@ class RobloxSearchPlugin(Star):
     @filter.command("群组名搜索")
     async def group_name_search(self, event: AstrMessageEvent):
         '''根据群组名模糊搜索群组并展示详情'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         name = _parse_param(event, "群组名搜索")
         if not name:
             yield self._plain(event, "请输入群组名，例：/群组名搜索 Roblox")
             return
-        yield self._plain(event, "正在搜索群组，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, "正在搜索群组，请稍候...")
         try:
             search_result = await search_group(name)
             groups = search_result.get("data", []) if search_result else []
@@ -449,7 +512,7 @@ class RobloxSearchPlugin(Star):
             output += f"群组ID：{gid}\n"
             output += f"成员数量：{member_count:,}\n"
             output += f"群主：{owner_text}\n"
-            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"创建时间：{_fmt_date(create_dt)}\n"
             output += f"是否公开：{'是' if is_public else '否'}\n"
             output += f"\n【群组描述】\n{description[:300]}{'......' if len(description) > 300 else ''}"
 
@@ -476,15 +539,17 @@ class RobloxSearchPlugin(Star):
     @filter.command("群组ID搜索")
     async def group_id_search(self, event: AstrMessageEvent):
         '''根据群组ID查询群组详情与职位列表'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         gid_str = _parse_param(event, "群组ID搜索")
         if not gid_str or not gid_str.isdigit():
             yield self._plain(event, "请输入有效的群组ID（纯数字），例：/群组ID搜索 123456")
             return
         gid = int(gid_str)
-        yield self._plain(event, "正在查询群组信息，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, "正在查询群组信息，请稍候...")
         try:
             group_info, roles, icon_url = await asyncio.gather(
                 get_group_info(gid), get_group_roles(gid), get_group_icon(gid),
@@ -516,7 +581,7 @@ class RobloxSearchPlugin(Star):
             output += f"群组ID：{gid}\n"
             output += f"成员数量：{member_count:,}\n"
             output += f"群主：{owner_text}\n"
-            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
+            output += f"创建时间：{_fmt_date(create_dt)}\n"
             output += f"是否公开：{'是' if is_public else '否'}\n"
             output += f"\n【群组描述】\n{description[:200]}{'......' if len(description) > 200 else ''}"
 
@@ -544,19 +609,21 @@ class RobloxSearchPlugin(Star):
     @filter.command("游戏名搜索")
     async def game_name_search(self, event: AstrMessageEvent):
         '''根据游戏名搜索游戏'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         name = _parse_param(event, "游戏名搜索")
         if not name:
             yield self._plain(event, "请输入游戏名，例：/游戏名搜索 Adopt Me")
             return
-        yield self._plain(event, "正在搜索游戏，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, "正在搜索游戏，请稍候...")
         try:
             search_result = await search_game(name)
             games = search_result.get("data", []) if search_result else []
             if not games:
-                yield self._plain(event, "未找到匹配的游戏，请检查游戏名是否正确（若确定无误，可能是游戏搜索服务暂时不可用）")
+                yield self._plain(event, "未找到匹配的游戏。注意：游戏名搜索接口（games/list）已被 Roblox 上游下线，当前数据源不可用；可到 roblox.com 网页搜索获取游戏ID后，用 /游戏ID搜索 [ID] 查询详情")
                 return
 
             game = games[0]
@@ -598,8 +665,8 @@ class RobloxSearchPlugin(Star):
                 output += f"点赞数：{likes:,}\n"
             if genre:
                 output += f"类型：{genre}\n"
-            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n"
+            output += f"创建时间：{_fmt_date(create_dt)}\n"
+            output += f"更新时间：{_fmt_date(update_dt)}\n"
             output += f"\n【游戏描述】\n{description[:300]}{'......' if len(description) > 300 else ''}"
 
             if len(games) > 1:
@@ -625,28 +692,28 @@ class RobloxSearchPlugin(Star):
     @filter.command("游戏ID搜索")
     async def game_id_search(self, event: AstrMessageEvent):
         '''根据游戏ID查询游戏详情与公开服务器列表'''
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
         gid_str = _parse_param(event, "游戏ID搜索")
         if not gid_str or not gid_str.isdigit():
             yield self._plain(event, "请输入有效的游戏ID（纯数字），例：/游戏ID搜索 292439477")
             return
         gid = int(gid_str)
-        yield self._plain(event, "正在查询游戏信息，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, "正在查询游戏信息，请稍候...")
         try:
             # 同时尝试地点ID与游戏ID(universeId)两种查询，取有数据的那一个。
             # 注意：当前代理对 placeIds 参数支持不稳定（400/504），因此地点查询
             # 只保留 1 次尝试，避免长时间重试拖慢 universeIds 的正确结果。
-            game_info, uni_info, icon_url, servers = await asyncio.gather(
+            game_info, uni_info, icon_url = await asyncio.gather(
                 get_game_info(gid, retries=1),
                 get_game_info_by_universe(gid),
                 get_game_icon(gid),
-                get_game_servers(gid),
                 return_exceptions=True,
             )
             icon_url = "" if isinstance(icon_url, Exception) else (icon_url or "")
-            servers = [] if isinstance(servers, Exception) else (servers or [])
 
             # 选择第一个非异常且有 data 的查询结果
             errs = [r for r in (game_info, uni_info) if isinstance(r, RobloxAPIError)]
@@ -665,6 +732,11 @@ class RobloxSearchPlugin(Star):
             if not game_detail:
                 yield self._plain(event, "未找到该游戏，请检查游戏ID是否正确！")
                 return
+
+            # 服务器列表接口的参数是地点ID：用户输入可能是 universeId，
+            # 优先用详情里的 rootPlaceId 才能查对（该接口当前上游已禁用，返回空列表属预期）
+            root_place_id = game_detail.get("rootPlaceId") or gid
+            servers = await get_game_servers(root_place_id)
 
             name_out = game_detail.get("name", "未知")
             description = (game_detail.get("description", "") or "").strip() or "无描述"
@@ -689,8 +761,8 @@ class RobloxSearchPlugin(Star):
                 output += f"点赞数：{likes:,}\n"
             if genre:
                 output += f"类型：{genre}\n"
-            output += f"创建时间：{create_dt.strftime('%Y-%m-%d') if create_dt else '未知'}\n"
-            output += f"更新时间：{update_dt.strftime('%Y-%m-%d') if update_dt else '未知'}\n"
+            output += f"创建时间：{_fmt_date(create_dt)}\n"
+            output += f"更新时间：{_fmt_date(update_dt)}\n"
             output += f"\n【游戏描述】\n{description[:200]}{'......' if len(description) > 200 else ''}"
 
             if servers:
@@ -717,28 +789,40 @@ class RobloxSearchPlugin(Star):
     # ============ 社交关系查询 ============
 
     async def _social_list(self, event: AstrMessageEvent, keyword: str, title: str, fetch):
-        """社交列表查询（好友/粉丝/关注共用），fetch 为对应的异步查询函数"""
-        if not self._check_whitelist(event):
-            yield self._plain(event, WHITELIST_MSG)
+        """社交列表查询（好友/粉丝/关注共用），fetch 为对应的异步查询函数。
+
+        参数格式：[用户ID] 或 [用户ID] [页码]，每页 10 个。
+        """
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
             return
-        uid_str = _parse_param(event, keyword)
+        parts = _parse_param(event, keyword).split()
+        uid_str = parts[0] if parts else ""
+        page = 1
+        if len(parts) >= 2 and parts[1].isdigit():
+            page = max(1, min(int(parts[1]), 50))
         if not uid_str or not uid_str.isdigit():
-            yield self._plain(event, f"请输入有效的用户ID（纯数字），例：/{keyword} 123456789")
+            yield self._plain(event, f"请输入有效的用户ID（纯数字），例：/{keyword} 123456789；翻页例：/{keyword} 123456789 2")
             return
         uid = int(uid_str)
-        yield self._plain(event, f"正在获取{title}，请稍候...")
+        if self._show_progress(event):
+            yield self._plain(event, f"正在获取{title}（第{page}页），请稍候...")
         try:
-            items = await fetch(uid, 10)
-            items = items[:10]  # 保险起见强制截断前 10 个（部分接口可能忽略 limit 参数）
+            items = await fetch(uid, 10, page)
+            items = items[:10]  # 保险起见强制截断本页 10 个
             if not items:
-                yield self._plain(event, "未找到该用户的相关列表（可能用户ID不存在，或该接口暂时不可用）")
+                if page > 1:
+                    yield self._plain(event, f"第{page}页没有更多内容了")
+                else:
+                    yield self._plain(event, "未找到该用户的相关列表（可能用户ID不存在，或该接口暂时不可用）")
                 return
-            output = f"【{title}】用户ID {uid}（前10个）\n"
+            output = f"【{title}】用户ID {uid}（第{page}页，每页10个）\n"
             for idx, item in enumerate(items, 1):
-                name = item.get("name", "未知")
-                display_name = item.get("displayName", "未知")
+                name = item.get("name") or "未知"
+                display_name = item.get("displayName") or name
                 iid = item.get("id", 0)
-                output += f"{idx}. {name}（{display_name}）｜ ID：{iid}\n"
+                output += f"{idx + (page - 1) * 10}. {name}（{display_name}）｜ ID：{iid}\n"
             yield self._plain(event, _truncate(output))
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -761,6 +845,35 @@ class RobloxSearchPlugin(Star):
         '''读取用户前10位关注'''
         async for res in self._social_list(event, "获取关注列表", "关注列表", get_followings):
             yield res
+
+    @filter.command("获取徽章列表")
+    async def badges_list(self, event: AstrMessageEvent):
+        '''读取用户获得的 Roblox 官方徽章'''
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
+            return
+        uid_str = _parse_param(event, "获取徽章列表")
+        if not uid_str or not uid_str.isdigit():
+            yield self._plain(event, "请输入有效的用户ID（纯数字），例：/获取徽章列表 156")
+            return
+        uid = int(uid_str)
+        if self._show_progress(event):
+            yield self._plain(event, "正在获取徽章列表，请稍候...")
+        try:
+            badges = await get_user_badges(uid)
+            if not badges:
+                yield self._plain(event, "该用户暂无徽章（或用户ID不存在、接口暂时不可用）")
+                return
+            output = f"【Roblox 徽章列表】用户ID {uid}（共{len(badges)}枚）\n"
+            for idx, badge in enumerate(badges[:15], 1):
+                output += f"{idx}. {badge.get('name') or '未知'}\n"
+            if len(badges) > 15:
+                output += f"……共{len(badges)}枚，仅展示前15枚\n"
+            yield self._plain(event, _truncate(output))
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            yield self._plain(event, f"获取失败：{str(e)}")
 
     # ============ 无斜杠命令分发（可在配置中关闭） ============
 
