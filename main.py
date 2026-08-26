@@ -239,11 +239,12 @@ def _build_qq_user_markdown(
     inline = lambda value: _escape_qq_markdown(value).replace("\n", " ")
     lines = ["# 罗布乐思（Roblox）档案"]
     if headshot_image and avatar_image:
-        lines.extend([
+        # 表格内部必须使用单换行；整条 Markdown 消息的其他段落再用空行分隔。
+        lines.append("\n".join((
             "| 头像 | Roblox形象 |",
             "| :--: | :--: |",
             f"| {headshot_image} | {avatar_image} |",
-        ])
+        )))
     elif headshot_image:
         lines.append(headshot_image)
     elif avatar_image:
@@ -253,7 +254,7 @@ def _build_qq_user_markdown(
     else:
         lines.append(f"**用户名：** `{inline(raw_name)}`")
     lines.extend([
-        f"{following_count} 关注 | {follower_count} 粉丝 | {friend_count} 好友",
+        f"{following_count} 关注 ｜ {follower_count} 粉丝 ｜ {friend_count} 好友",
         f"**用户 ID：** `{user_id}`",
     ])
     if created_date:
@@ -472,6 +473,7 @@ class RobloxSearchPlugin(Star):
                 )
             else:
                 return False
+            logger.info("[Roblox] 已通过 QQ 官方原生 Markdown 接口发送用户资料")
             return True
         except Exception as exc:
             logger.warning("[Roblox] QQ 原生 Markdown 发送失败，回退 AstrBot 消息链: %s", exc)
@@ -782,8 +784,9 @@ class RobloxSearchPlugin(Star):
 
             # QQ 官方机器人必须保持原生 Markdown 输出；头像和 3D 形象放在双栏表格中。
             if platform == "qq_official":
-                headshot_image = self._qq_markdown_image("头像", headshot_url, 180, 180)
-                avatar_image = self._qq_markdown_image("3D 虚拟形象", avatar_url, 300, 300)
+                # QQ 手机端的表格图片总宽度不能太大，否则会被客户端改为纵向排版。
+                headshot_image = self._qq_markdown_image("头像", headshot_url, 160, 160)
+                avatar_image = self._qq_markdown_image("Roblox形象", avatar_url, 160, 160)
                 markdown = _build_qq_user_markdown(
                     raw_name=raw_name,
                     display_name=display_name,
