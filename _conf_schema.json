@@ -28,6 +28,12 @@
         "hint": "例：https://wsrv.nl/；留空禁用代理",
         "default": "https://wsrv.nl/"
     },
+    "enable_direct_binding": {
+        "type": "bool",
+        "description": "是否启用 Roblox 简介验证码绑定功能。关闭后 /绑定、/绑定ID、/解绑 命令不可用。",
+        "hint": "开启后用户可把插件生成的验证码放入 Roblox 个人简介，再发送 /绑定完成验证。",
+        "default": true
+    },
     "query_cooldown": {
         "type": "int",
         "description": "查询冷却：同一群内同一用户两次查询的最小间隔秒数，防止刷屏与触发接口限流；0 = 不限制。",

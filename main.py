@@ -20,11 +20,16 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
     获取粉丝列表 [用户ID] [页码]  读取用户粉丝（每页10个）
     获取关注列表 [用户ID] [页码]  读取用户关注（每页10个）
     获取徽章列表 [用户ID]        读取用户获得的 Roblox 官方徽章
+    绑定 [用户名]                生成 Roblox 简介绑定验证码；不带参数时检测绑定
+    绑定ID [数字ID]              按用户ID生成绑定验证码
+    解绑                         解除当前账号的 Roblox 绑定
+    查询                         查询当前已绑定的 Roblox 账号
 """
 
 import asyncio
 import html
 import os
+import secrets
 import tempfile
 import time
 import traceback
@@ -325,6 +330,8 @@ class RobloxSearchPlugin(Star):
         self.whitelist = [str(x) for x in raw_whitelist]
         # 是否支持无斜杠触发命令
         self.allow_no_slash = bool(config.get("allow_no_slash_command", True))
+        # 是否启用通过 Roblox 简介验证码进行账号绑定
+        self.enable_direct_binding = bool(config.get("enable_direct_binding", True))
         # 机器人平台类型：auto 自动识别 / onebot / qq_official
         self.platform_type = str(config.get("platform_type", "auto") or "auto").strip().lower()
         # 数据源代理域名（默认 rotunnel.com，可换 roproxy.com / 自建反代）
@@ -339,7 +346,12 @@ class RobloxSearchPlugin(Star):
         except (TypeError, ValueError):
             self.cooldown = 5
         self._last_query: dict[tuple[str, str], float] = {}
+        self._binding_expire_seconds = 600
         self._no_slash_handlers = {
+            "绑定ID": self.bind_by_id,
+            "绑定": self.bind_account,
+            "解绑": self.unbind_account,
+            "查询": self.my_account_query,
             "用户名搜索": self.username_search,
             "用户ID搜索": self.user_id_search,
             "群组名搜索": self.group_name_search,
@@ -695,6 +707,166 @@ class RobloxSearchPlugin(Star):
 
     # ============ 用户查询 ============
 
+    def _binding_key(self, event: AstrMessageEvent) -> str:
+        platform = str(event.get_platform_name() or "default")
+        sender = self._qq_event_value(
+            event, ("member_openid", "user_openid", "openid", "user_id", "sender_id", "author_id")
+        ) or "unknown"
+        return f"roblox_binding:{platform}:{sender}"
+
+    def _pending_binding_key(self, event: AstrMessageEvent) -> str:
+        return f"{self._binding_key(event)}:pending"
+
+    def _binding_disabled_message(self) -> str:
+        return "管理员已关闭 Roblox 账号绑定功能。"
+
+    async def _resolve_binding_user(self, account: str) -> dict | None:
+        if account.isdigit():
+            return await get_user_details(int(account))
+        return await search_user(account)
+
+    def _binding_prompt(self, target: dict, challenge: str) -> str:
+        name = target.get("name") or target.get("displayName") or target.get("id")
+        return (
+            f"Roblox 账号：{name}（ID：{target.get('id')}）\n\n"
+            "请把下面这一行完整复制到该 Roblox 账号的个人简介中：\n\n"
+            f"{challenge}\n\n"
+            "保存简介后发送 /绑定，插件会立即检测。验证码 10 分钟内有效。"
+        )
+
+    @filter.command("绑定")
+    async def bind_account(self, event: AstrMessageEvent):
+        """生成验证码，或检测待绑定 Roblox 账号的简介。"""
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
+            return
+        if not self.enable_direct_binding:
+            yield self._plain(event, self._binding_disabled_message())
+            return
+        account = _parse_param(event, "绑定")
+        if not account:
+            pending = await self.get_kv_data(self._pending_binding_key(event), None)
+            if isinstance(pending, dict):
+                ok, message = await self._verify_binding(event)
+                yield self._plain(event, message)
+            else:
+                yield self._plain(event, "用法：/绑定 用户名；完成简介验证后再次发送 /绑定。")
+            return
+        try:
+            target = await self._resolve_binding_user(account)
+        except RobloxAPIError as exc:
+            yield self._plain(event, f"查询 Roblox 用户失败：{exc}")
+            return
+        if not target or not target.get("id"):
+            yield self._plain(event, "未找到该 Roblox 用户，请检查用户名或用户ID。")
+            return
+        challenge = f"RRBX-{secrets.token_hex(5).upper()}"
+        await self.put_kv_data(
+            self._pending_binding_key(event),
+            {"user_id": int(target["id"]), "challenge": challenge, "created_at": int(time.time())},
+        )
+        yield self._plain(event, self._binding_prompt(target, challenge))
+
+    @filter.command("绑定ID")
+    async def bind_by_id(self, event: AstrMessageEvent):
+        """按 Roblox 用户 ID 生成简介绑定验证码。"""
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
+            return
+        if not self.enable_direct_binding:
+            yield self._plain(event, self._binding_disabled_message())
+            return
+        uid = _parse_param(event, "绑定ID")
+        if not uid.isdigit():
+            yield self._plain(event, "用法：/绑定ID 用户ID")
+            return
+        try:
+            target = await self._resolve_binding_user(uid)
+        except RobloxAPIError as exc:
+            yield self._plain(event, f"查询 Roblox 用户失败：{exc}")
+            return
+        if not target or not target.get("id"):
+            yield self._plain(event, "未找到该 Roblox 用户，请检查用户ID。")
+            return
+        challenge = f"RRBX-{secrets.token_hex(5).upper()}"
+        await self.put_kv_data(
+            self._pending_binding_key(event),
+            {"user_id": int(target["id"]), "challenge": challenge, "created_at": int(time.time())},
+        )
+        yield self._plain(event, self._binding_prompt(target, challenge))
+
+    async def _verify_binding(self, event: AstrMessageEvent) -> tuple[bool, str]:
+        pending = await self.get_kv_data(self._pending_binding_key(event), None)
+        if not isinstance(pending, dict):
+            return False, "当前没有待验证的绑定，请先使用 /绑定 用户名 或 /绑定ID 用户ID。"
+        created_at = int(pending.get("created_at", 0) or 0)
+        if created_at and int(time.time()) - created_at > self._binding_expire_seconds:
+            await self.put_kv_data(self._pending_binding_key(event), None)
+            return False, "验证码已过期，请重新使用 /绑定。"
+        user_id = int(pending.get("user_id", 0) or 0)
+        challenge = str(pending.get("challenge", ""))
+        if not user_id or not challenge:
+            return False, "绑定信息异常，请重新使用 /绑定。"
+        details = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                details = await get_user_details(user_id)
+                if details and challenge in str(details.get("description") or ""):
+                    break
+            except RobloxAPIError as exc:
+                last_error = exc
+            if attempt < 2:
+                # Roblox 用户资料更新存在短暂缓存，给简介同步留出几秒时间。
+                await asyncio.sleep(2)
+        if last_error and not details:
+            return False, f"检测 Roblox 简介失败：{last_error}"
+        if not details or challenge not in str(details.get("description") or ""):
+            return False, "尚未在 Roblox 简介中检测到验证码，请确认已保存后再发送 /绑定。"
+        binding = {
+            "user_id": user_id,
+            "username": details.get("name") or str(user_id),
+            "display_name": details.get("displayName") or details.get("name") or str(user_id),
+            "bound_at": int(time.time()),
+        }
+        await self.put_kv_data(self._binding_key(event), binding)
+        await self.put_kv_data(self._pending_binding_key(event), None)
+        return True, f"绑定成功：{binding['display_name']}（@{binding['username']}）。现在可直接发送 /查询。"
+
+    @filter.command("解绑")
+    async def unbind_account(self, event: AstrMessageEvent):
+        """解除当前发送者的 Roblox 账号绑定。"""
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
+            return
+        if not self.enable_direct_binding:
+            yield self._plain(event, self._binding_disabled_message())
+            return
+        binding = await self.get_kv_data(self._binding_key(event), None)
+        await self.put_kv_data(self._binding_key(event), None)
+        await self.put_kv_data(self._pending_binding_key(event), None)
+        if isinstance(binding, dict):
+            yield self._plain(event, f"已解除 Roblox 账号绑定：{binding.get('username', '未知账号')}。")
+        else:
+            yield self._plain(event, "你当前没有绑定 Roblox 账号。")
+
+    @filter.command("查询")
+    async def my_account_query(self, event: AstrMessageEvent):
+        """查询当前发送者已绑定的 Roblox 账号。"""
+        gate = self._gate(event)
+        if gate:
+            yield self._plain(event, gate)
+            return
+        binding = await self.get_kv_data(self._binding_key(event), None)
+        if not isinstance(binding, dict) or not binding.get("user_id"):
+            yield self._plain(event, "你还没有绑定 Roblox 账号，请先使用 /绑定 用户名。")
+            return
+        async for result in self._user_query(event, int(binding["user_id"]), "查询"):
+            yield result
+
     @filter.command("用户名搜索")
     async def username_search(self, event: AstrMessageEvent):
         '''根据用户名查询 Roblox 用户完整资料'''
@@ -704,7 +876,12 @@ class RobloxSearchPlugin(Star):
             return
         username = _parse_param(event, "用户名搜索")
         if not username:
-            yield self._plain(event, "请输入用户名，例：/用户名搜索 Roblox")
+            binding = await self.get_kv_data(self._binding_key(event), None) if self.enable_direct_binding else None
+            if isinstance(binding, dict) and binding.get("user_id"):
+                async for result in self._user_query(event, int(binding["user_id"]), "用户名搜索"):
+                    yield result
+            else:
+                yield self._plain(event, "请输入用户名，例：/用户名搜索 Roblox；或先绑定后直接使用 /查询")
             return
         user_info = await search_user(username)
         if not user_info:
@@ -721,7 +898,15 @@ class RobloxSearchPlugin(Star):
             yield self._plain(event, gate)
             return
         uid_str = _parse_param(event, "用户ID搜索")
-        if not uid_str or not uid_str.isdigit():
+        if not uid_str:
+            binding = await self.get_kv_data(self._binding_key(event), None) if self.enable_direct_binding else None
+            if isinstance(binding, dict) and binding.get("user_id"):
+                async for result in self._user_query(event, int(binding["user_id"]), "用户ID搜索"):
+                    yield result
+            else:
+                yield self._plain(event, "请输入有效的用户ID（纯数字），例：/用户ID搜索 123456789；或先绑定后直接使用 /查询")
+            return
+        if not uid_str.isdigit():
             yield self._plain(event, "请输入有效的用户ID（纯数字），例：/用户ID搜索 123456789")
             return
         uid = int(uid_str)
