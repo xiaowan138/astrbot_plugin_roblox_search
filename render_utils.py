@@ -74,7 +74,6 @@ ul { margin: 0; padding-left: 22px; color: #e2e8f0; line-height: 1.9; }
   </section>
   <section class=\"section\"><h2>用户简介</h2><p class=\"description\">{{ user.description }}</p></section>
   <section class=\"section\"><h2>群组列表</h2>{% if user.groups %}<ul>{% for group in user.groups %}<li>{{ group }}</li>{% endfor %}</ul>{% else %}<p class=\"description\">暂无公开群组</p>{% endif %}</section>
-  <footer class=\"footer\">Roblox 全功能查询插件</footer>
 </div>
 </body>
 </html>"""

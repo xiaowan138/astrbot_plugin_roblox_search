@@ -237,10 +237,10 @@ def _build_qq_user_markdown(
 ) -> str:
     """构造 QQ 官方机器人原生 Markdown 用户资料。"""
     inline = lambda value: _escape_qq_markdown(value).replace("\n", " ")
-    lines = ["# Roblox 用户信息"]
+    lines = ["# 罗布乐思（Roblox）档案"]
     if headshot_image and avatar_image:
         lines.extend([
-            "| 头像 | 虚拟形象 |",
+            "| 头像 | Roblox形象 |",
             "| :--: | :--: |",
             f"| {headshot_image} | {avatar_image} |",
         ])
@@ -248,11 +248,12 @@ def _build_qq_user_markdown(
         lines.append(headshot_image)
     elif avatar_image:
         lines.append(avatar_image)
-    lines.append(f"**用户名：** `{inline(raw_name)}`")
     if display_name and display_name != raw_name:
-        lines.append(f"**展示名：** {inline(display_name)}")
+        lines.append(f"**用户名：** {inline(display_name)} `(@{inline(raw_name)})`")
+    else:
+        lines.append(f"**用户名：** `{inline(raw_name)}`")
     lines.extend([
-        f"**关注｜粉丝｜好友：** `{following_count}` ｜ `{follower_count}` ｜ `{friend_count}`",
+        f"{following_count} 关注 | {follower_count} 粉丝 | {friend_count} 好友",
         f"**用户 ID：** `{user_id}`",
     ])
     if created_date:
@@ -268,14 +269,12 @@ def _build_qq_user_markdown(
     if verified is not None:
         lines.append(f"**已认证：** {'是' if verified else '否'}")
 
-    if description:
-        desc = _escape_qq_markdown(description[:500]).replace("\n", "  \n")
-        suffix = "……" if len(description) > 500 else ""
-        lines.extend(["## 用户简介", f"{desc}{suffix}"])
-    else:
-        lines.extend(["## 用户简介", "无"])
+    desc = inline(description[:500]) if description else "无"
+    if description and len(description) > 500:
+        desc += "……"
+    lines.append(f"**用户简介：** {desc}")
 
-    lines.append("## 群组列表")
+    lines.append("**群组列表：**")
     if groups:
         for group in groups[:5]:
             group_name = inline(group.get("group", {}).get("name", "未知"))
