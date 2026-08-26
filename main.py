@@ -14,8 +14,8 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
     用户ID搜索 [数字ID]          按用户ID查询用户完整资料
     群组名搜索 [群组名]          模糊搜索群组并展示详情
     群组ID搜索 [数字ID]          查询群组详情与职位列表
-    游戏名搜索 [游戏名]          搜索游戏、在线人数、访问量
-    游戏ID搜索 [数字ID]          查询游戏详情与公开服务器列表
+    游戏名搜索 [游戏名]          OMNI 搜索游戏并展示详情
+    游戏ID搜索 [数字ID]          按 Universe ID / 地点 ID 查询游戏详情
     获取好友列表 [用户ID] [页码]  读取用户好友（每页10个，可翻页）
     获取粉丝列表 [用户ID] [页码]  读取用户粉丝（每页10个）
     获取关注列表 [用户ID] [页码]  读取用户关注（每页10个）
@@ -23,6 +23,7 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
 """
 
 import asyncio
+import html
 import os
 import tempfile
 import time
@@ -50,7 +51,7 @@ from .roblox_api import (
     get_game_icon,
     get_game_info,
     get_game_info_by_universe,
-    get_game_servers,
+    get_game_votes,
     get_group_icon,
     get_group_info,
     get_group_roles,
@@ -64,7 +65,7 @@ from .roblox_api import (
     search_user,
     set_base_domain,
 )
-from .render_utils import menu_to_image
+from .render_utils import GAME_CARD_TEMPLATE, menu_to_image
 
 # 非白名单群的拒绝提示（与原插件一致）
 WHITELIST_MSG = "此群未获得账号所有者的允许，未开放此群白名单，暂时不开使用，请联系账号所有者"
@@ -390,6 +391,114 @@ class RobloxSearchPlugin(Star):
         """图文消息输出：强制关闭 Markdown 渲染（不影响图片发送）"""
         return event.chain_result(chain).use_markdown(False)
 
+    @staticmethod
+    def _game_value(value, fallback="未知") -> str:
+        """将游戏字段安全转为展示文本。"""
+        return str(value if value not in (None, "") else fallback)
+
+    def _build_qq_game_markdown(self, game: dict) -> str:
+        """构造 QQ 官方机器人原生 Markdown 游戏资料，不包含媒体组件。"""
+        inline = lambda value: _escape_qq_markdown(self._game_value(value)).replace("\n", " ")
+        description = self._game_value(game.get("description"), "无描述")
+        desc = _escape_qq_markdown(description[:500]).replace("\n", "  \n")
+        if len(description) > 500:
+            desc += "……"
+        lines = [
+            "# Roblox 游戏信息",
+            f"**游戏名：** {inline(game.get('name'))}",
+            f"**开发者：** {inline(game.get('creator'))}",
+            f"**Universe ID：** `{game.get('universe_id', 0)}`",
+            f"**地点 ID：** `{game.get('place_id', 0)}`",
+            f"**当前游玩：** `{game.get('playing', 0):,}`",
+            f"**总访问量：** `{game.get('visits', 0):,}`",
+            f"**收藏数：** `{game.get('favorites', 0):,}`",
+            f"**点赞数：** `{game.get('likes', 0):,}`",
+            f"**类型：** {inline(game.get('genre'))}",
+            f"**创建时间：** `{game.get('created', '未知')}`",
+            f"**更新时间：** `{game.get('updated', '未知')}`",
+            "## 游戏简介",
+            desc,
+            f"[在 Roblox 中打开](https://www.roblox.com/games/{game.get('place_id', 0)})",
+        ]
+        return _truncate("\n\n".join(lines))
+
+    def _build_game_plain_text(self, game: dict, title: str) -> str:
+        """构造 OneBot HTML 渲染失败时使用的纯文本回退内容。"""
+        output = f"【{title}】\n"
+        output += f"游戏名：{game['name']}\n"
+        output += f"游戏ID：{game['universe_id']}\n"
+        output += f"地点ID：{game['place_id']}\n"
+        output += f"开发者：{game['creator']}\n"
+        output += f"当前游玩：{game['playing']:,}\n"
+        output += f"总访问量：{game['visits']:,}\n"
+        output += f"收藏数：{game['favorites']:,}\n"
+        output += f"点赞数：{game['likes']:,}\n"
+        output += f"类型：{game['genre']}\n"
+        output += f"创建时间：{game['created']}\n"
+        output += f"更新时间：{game['updated']}\n"
+        output += f"\n【游戏描述】\n{game['description'][:300]}{'......' if len(game['description']) > 300 else ''}"
+        return _truncate(output)
+
+    async def _render_game_result(self, event: AstrMessageEvent, game: dict, title: str):
+        """按平台渲染游戏结果：官机 Markdown，OneBot HTML 卡片并带图文回退。"""
+        if self._resolve_platform(event) == "qq_official":
+            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
+            return
+
+        template_game = {
+            "image_url": html.escape(game["icon_url"], quote=True),
+            "name": html.escape(game["name"]),
+            "creator": html.escape(game["creator"]),
+            "genre": html.escape(game["genre"]),
+            "universe_id": game["universe_id"],
+            "place_id": game["place_id"],
+            "description": html.escape(game["description"][:500]),
+            "playing": f"{game['playing']:,}",
+            "visits": f"{game['visits']:,}",
+            "favorites": f"{game['favorites']:,}",
+            "likes": f"{game['likes']:,}",
+            "created": game["created"],
+            "updated": game["updated"],
+        }
+        try:
+            image_url = await self.html_render(
+                GAME_CARD_TEMPLATE,
+                {"game": template_game},
+                options={"type": "png", "full_page": True, "animations": "disabled"},
+            )
+            if image_url:
+                yield event.image_result(image_url)
+                return
+        except Exception as e:
+            logger.warning(f"[Roblox] 游戏卡片渲染失败，回退图文链: {e}")
+
+        chain = []
+        icon_path = await _download_to_temp(game["icon_url"]) if game["icon_url"] else None
+        if icon_path:
+            chain.append(Image.fromFileSystem(icon_path))
+        chain.append(Plain(self._build_game_plain_text(game, title)))
+        yield self._chain(event, chain)
+
+    async def _build_game_data(self, detail: dict, universe_id: int, icon_url: str, votes: dict | None = None) -> dict:
+        """标准化游戏字段，供官机 Markdown、OneBot 卡片和回退文本共用。"""
+        creator = detail.get("creator", {}) or {}
+        votes = votes or {}
+        return {
+            "name": self._game_value(detail.get("name")),
+            "universe_id": int(detail.get("id") or universe_id),
+            "place_id": int(detail.get("rootPlaceId") or 0),
+            "creator": self._game_value(creator.get("name")),
+            "playing": int(detail.get("playing", 0) or 0),
+            "visits": int(detail.get("visits", 0) or 0),
+            "favorites": int(detail.get("favorites", 0) or 0),
+            "likes": int(votes.get("upVotes", detail.get("likes", 0)) or 0),
+            "genre": self._game_value(detail.get("genre")),
+            "created": _fmt_date(_parse_date(detail.get("created", ""))),
+            "updated": _fmt_date(_parse_date(detail.get("updated", ""))),
+            "description": self._game_value(detail.get("description"), "无描述"),
+            "icon_url": icon_url or "",
+        }
+
     # ============ 菜单 ============
 
     @filter.command("菜单", alias={"帮助", "menu"})
@@ -474,7 +583,10 @@ class RobloxSearchPlugin(Star):
             following_count = _safe(4, None)
             avatar_url = ""
             headshot_url = ""
-            if platform != "qq_official":
+            if platform == "qq_official":
+                avatar_result = await get_avatar_url(user_id)
+                avatar_url = "" if isinstance(avatar_result, Exception) else (avatar_result or "")
+            else:
                 avatar_result, headshot_result = await asyncio.gather(
                     get_avatar_url(user_id),
                     get_headshot_url(user_id),
@@ -497,6 +609,11 @@ class RobloxSearchPlugin(Star):
             # QQ 官方 Markdown 与媒体组件不能出现在同一条高层消息链中；
             # 官机在此直接返回纯 Markdown，避免适配器降级为 msg_type=7 富媒体消息。
             if platform == "qq_official":
+                # QQ 原生 Markdown 不能与 Image 同链：先独立发送一张 3D 虚拟形象，
+                # 再单独发送 Markdown 资料卡；图片失败不影响资料输出。
+                avatar_path = await _download_to_temp(avatar_url) if avatar_url else None
+                if avatar_path:
+                    yield self._chain(event, [Image.fromFileSystem(avatar_path)])
                 markdown = _build_qq_user_markdown(
                     raw_name=raw_name,
                     display_name=display_name,
@@ -705,7 +822,7 @@ class RobloxSearchPlugin(Star):
 
     @filter.command("游戏名搜索")
     async def game_name_search(self, event: AstrMessageEvent):
-        '''根据游戏名搜索游戏'''
+        '''根据游戏名搜索游戏（OMNI Search）'''
         gate = self._gate(event)
         if gate:
             yield self._plain(event, gate)
@@ -720,75 +837,41 @@ class RobloxSearchPlugin(Star):
             search_result = await search_game(name)
             games = search_result.get("data", []) if search_result else []
             if not games:
-                yield self._plain(event, "未找到匹配的游戏。注意：游戏名搜索接口（games/list）已被 Roblox 上游下线，当前数据源不可用；可到 roblox.com 网页搜索获取游戏ID后，用 /游戏ID搜索 [ID] 查询详情")
+                yield self._plain(event, "未找到匹配的游戏，请检查游戏名是否正确后重试")
                 return
 
-            game = games[0]
-            place_id = game.get("placeId", 0)
-            game_id = game.get("id", 0)
-            game_info, icon_url = await asyncio.gather(
-                get_game_info(place_id), get_game_icon(game_id), return_exceptions=True)
+            candidate = games[0]
+            universe_id = int(candidate.get("id") or 0)
+            if not universe_id:
+                yield self._plain(event, "游戏搜索结果缺少有效的 Universe ID，请稍后重试")
+                return
+            game_info, icon_url, votes = await asyncio.gather(
+                get_game_info_by_universe(universe_id),
+                get_game_icon(universe_id),
+                get_game_votes(universe_id),
+                return_exceptions=True,
+            )
             if isinstance(game_info, Exception):
                 if isinstance(game_info, RobloxAPIError):
-                    raise game_info  # 网络/服务端错误 → 外层统一提示“查询失败”
+                    raise game_info
                 game_info = {}
-            game_info = game_info or {}
-            icon_url = "" if isinstance(icon_url, Exception) else (icon_url or "")
-
             game_data = game_info.get("data", []) if isinstance(game_info, dict) else []
             game_detail = game_data[0] if game_data else {}
-
-            name_out = game_detail.get("name", game.get("name", "未知"))
-            description = (game_detail.get("description", "") or "").strip() or "无描述"
-            creator = game_detail.get("creator", {}) or {}
-            creator_name = creator.get("name", game.get("creatorName", "未知"))
-            playing = game_detail.get("playing", 0)
-            visits = game_detail.get("visits", 0)
-            favorites = game_detail.get("favorites", 0)
-            likes = game_detail.get("likes")
-            genre = game_detail.get("genre")
-            create_dt = _parse_date(game_detail.get("created", ""))
-            update_dt = _parse_date(game_detail.get("updated", ""))
-
-            output = "【Roblox 游戏搜索】\n"
-            output += f"游戏名：{name_out}\n"
-            output += f"游戏ID：{game_id}\n"
-            output += f"地点ID：{place_id}\n"
-            output += f"开发者：{creator_name}\n"
-            output += f"当前游玩：{playing:,}\n"
-            output += f"总访问量：{visits:,}\n"
-            output += f"收藏数：{favorites:,}\n"
-            if likes is not None:
-                output += f"点赞数：{likes:,}\n"
-            if genre:
-                output += f"类型：{genre}\n"
-            output += f"创建时间：{_fmt_date(create_dt)}\n"
-            output += f"更新时间：{_fmt_date(update_dt)}\n"
-            output += f"\n【游戏描述】\n{description[:300]}{'......' if len(description) > 300 else ''}"
-
-            if len(games) > 1:
-                output += f"\n\n【更多匹配（共{len(games)}个）】\n"
-                for cand in games[1:4]:
-                    cid = cand.get("id", 0)
-                    cname = cand.get("name", "未知")
-                    output += f"· {cname}（ID：{cid}）\n"
-                output += "发送 /游戏ID搜索 [ID] 查看详情"
-
-            output = _truncate(output)
-
-            chain = []
-            icon_path = await _download_to_temp(icon_url) if icon_url else None
-            if icon_path:
-                chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain(output))
-            yield self._chain(event, chain)
+            if not game_detail:
+                yield self._plain(event, "已找到游戏候选，但无法读取游戏详情，请稍后重试")
+                return
+            icon_url = "" if isinstance(icon_url, Exception) else (icon_url or "")
+            votes = {} if isinstance(votes, Exception) else (votes or {})
+            game_data = await self._build_game_data(game_detail, universe_id, icon_url, votes)
+            async for result in self._render_game_result(event, game_data, "Roblox 游戏搜索"):
+                yield result
         except Exception as e:
             logger.error(traceback.format_exc())
             yield self._plain(event, f"查询失败：{str(e)}")
 
     @filter.command("游戏ID搜索")
     async def game_id_search(self, event: AstrMessageEvent):
-        '''根据游戏ID查询游戏详情与公开服务器列表'''
+        '''根据游戏ID查询游戏详情（兼容 Universe ID / 地点 ID）'''
         gate = self._gate(event)
         if gate:
             yield self._plain(event, gate)
@@ -801,84 +884,34 @@ class RobloxSearchPlugin(Star):
         if self._show_progress(event):
             yield self._plain(event, "正在查询游戏信息，请稍候...")
         try:
-            # 同时尝试地点ID与游戏ID(universeId)两种查询，取有数据的那一个。
-            # 注意：当前代理对 placeIds 参数支持不稳定（400/504），因此地点查询
-            # 只保留 1 次尝试，避免长时间重试拖慢 universeIds 的正确结果。
-            game_info, uni_info, icon_url = await asyncio.gather(
+            # 兼容输入 placeId/universeId：优先按 universeId，失败后按 placeId 兜底。
+            uni_info, place_info = await asyncio.gather(
+                get_game_info_by_universe(gid, retries=1),
                 get_game_info(gid, retries=1),
-                get_game_info_by_universe(gid),
-                get_game_icon(gid),
+                return_exceptions=True,
+            )
+            errs = [r for r in (uni_info, place_info) if isinstance(r, RobloxAPIError)]
+            picked = next(
+                (r for r in (uni_info, place_info) if isinstance(r, dict) and r.get("data")),
+                None,
+            )
+            if not picked:
+                if errs:
+                    raise errs[0]
+                yield self._plain(event, "未找到该游戏，请检查游戏ID是否正确！")
+                return
+            game_detail = picked["data"][0]
+            universe_id = int(game_detail.get("id") or gid)
+            icon_url, votes = await asyncio.gather(
+                get_game_icon(universe_id),
+                get_game_votes(universe_id),
                 return_exceptions=True,
             )
             icon_url = "" if isinstance(icon_url, Exception) else (icon_url or "")
-
-            # 选择第一个非异常且有 data 的查询结果
-            errs = [r for r in (game_info, uni_info) if isinstance(r, RobloxAPIError)]
-            picked = None
-            for r in (game_info, uni_info):
-                if isinstance(r, dict) and r.get("data"):
-                    picked = r
-                    break
-            if not picked:
-                if errs:
-                    raise errs[0]  # 网络/服务端错误 → 外层统一提示“查询失败”
-                yield self._plain(event, "未找到该游戏，请检查游戏ID是否正确！")
-                return
-            game_data = picked.get("data", [])
-            game_detail = game_data[0] if game_data else {}
-            if not game_detail:
-                yield self._plain(event, "未找到该游戏，请检查游戏ID是否正确！")
-                return
-
-            # 服务器列表接口的参数是地点ID：用户输入可能是 universeId，
-            # 优先用详情里的 rootPlaceId 才能查对（该接口当前上游已禁用，返回空列表属预期）
-            root_place_id = game_detail.get("rootPlaceId") or gid
-            servers = await get_game_servers(root_place_id)
-
-            name_out = game_detail.get("name", "未知")
-            description = (game_detail.get("description", "") or "").strip() or "无描述"
-            creator = game_detail.get("creator", {}) or {}
-            creator_name = creator.get("name", "未知")
-            playing = game_detail.get("playing", 0)
-            visits = game_detail.get("visits", 0)
-            favorites = game_detail.get("favorites", 0)
-            likes = game_detail.get("likes")
-            genre = game_detail.get("genre")
-            create_dt = _parse_date(game_detail.get("created", ""))
-            update_dt = _parse_date(game_detail.get("updated", ""))
-
-            output = "【Roblox 游戏详情】\n"
-            output += f"游戏名：{name_out}\n"
-            output += f"游戏ID：{gid}\n"
-            output += f"开发者：{creator_name}\n"
-            output += f"当前游玩：{playing:,}\n"
-            output += f"总访问量：{visits:,}\n"
-            output += f"收藏数：{favorites:,}\n"
-            if likes is not None:
-                output += f"点赞数：{likes:,}\n"
-            if genre:
-                output += f"类型：{genre}\n"
-            output += f"创建时间：{_fmt_date(create_dt)}\n"
-            output += f"更新时间：{_fmt_date(update_dt)}\n"
-            output += f"\n【游戏描述】\n{description[:200]}{'......' if len(description) > 200 else ''}"
-
-            if servers:
-                output += "\n\n【公开服务器（前3个）】\n"
-                for idx, server in enumerate(servers[:3], 1):
-                    server_id = server.get("id", "未知")
-                    s_playing = server.get("playing", 0)
-                    max_players = server.get("maxPlayers", "?")
-                    ping = server.get("ping", "?")
-                    output += f"{idx}. {server_id}（{s_playing}/{max_players}，{ping}ms）\n"
-
-            output = _truncate(output)
-
-            chain = []
-            icon_path = await _download_to_temp(icon_url) if icon_url else None
-            if icon_path:
-                chain.append(Image.fromFileSystem(icon_path))
-            chain.append(Plain(output))
-            yield self._chain(event, chain)
+            votes = {} if isinstance(votes, Exception) else (votes or {})
+            game_data = await self._build_game_data(game_detail, universe_id, icon_url, votes)
+            async for result in self._render_game_result(event, game_data, "Roblox 游戏详情"):
+                yield result
         except Exception as e:
             logger.error(traceback.format_exc())
             yield self._plain(event, f"查询失败：{str(e)}")

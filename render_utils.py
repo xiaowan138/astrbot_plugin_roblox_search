@@ -18,6 +18,57 @@ _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_CACHE = {}
 _VERSION = ""
 
+# 由 AstrBot Star.html_render 渲染的 OneBot 游戏信息卡。动态值在调用方已做 HTML 转义。
+GAME_CARD_TEMPLATE = """<!DOCTYPE html>
+<html lang=\"zh-CN\">
+<head>
+<meta charset=\"UTF-8\">
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; padding: 32px; background: radial-gradient(circle at top right, #1d4ed8 0%, transparent 32%), linear-gradient(135deg, #0f172a, #111827); color: #f8fafc; font-family: \"Microsoft YaHei\", \"PingFang SC\", sans-serif; }
+.card { width: 980px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 24px; background: rgba(15,23,42,.9); box-shadow: 0 20px 55px rgba(0,0,0,.35); }
+.hero { display: flex; gap: 26px; padding: 28px; background: linear-gradient(135deg, rgba(59,130,246,.24), rgba(16,185,129,.12)); }
+.icon { width: 220px; height: 220px; flex: 0 0 220px; overflow: hidden; border-radius: 20px; background: #1e293b; border: 1px solid rgba(255,255,255,.16); }
+.icon img { width: 100%; height: 100%; object-fit: cover; }
+h1 { margin: 0 0 14px; font-size: 34px; line-height: 1.25; }
+.meta { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
+.tag { padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.11); font-size: 14px; }
+.desc { margin: 0; line-height: 1.65; color: #dbeafe; white-space: pre-wrap; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 28px 24px; }
+.stat { padding: 16px; border: 1px solid rgba(255,255,255,.11); border-radius: 16px; background: rgba(255,255,255,.05); }
+.label { color: #94a3b8; font-size: 13px; }
+.value { margin-top: 7px; font-size: 21px; font-weight: 700; }
+.footer { padding: 0 28px 28px; color: #94a3b8; font-size: 13px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class=\"card\">
+  <section class=\"hero\">
+    <div class=\"icon\"><img src=\"{{ game.image_url }}\" alt=\"游戏图标\"></div>
+    <div>
+      <h1>{{ game.name }}</h1>
+      <div class=\"meta\">
+        <span class=\"tag\">开发者：{{ game.creator }}</span>
+        <span class=\"tag\">类型：{{ game.genre }}</span>
+        <span class=\"tag\">Universe ID：{{ game.universe_id }}</span>
+        <span class=\"tag\">地点 ID：{{ game.place_id }}</span>
+      </div>
+      <p class=\"desc\">{{ game.description }}</p>
+    </div>
+  </section>
+  <section class=\"stats\">
+    <div class=\"stat\"><div class=\"label\">当前游玩</div><div class=\"value\">{{ game.playing }}</div></div>
+    <div class=\"stat\"><div class=\"label\">总访问量</div><div class=\"value\">{{ game.visits }}</div></div>
+    <div class=\"stat\"><div class=\"label\">收藏数</div><div class=\"value\">{{ game.favorites }}</div></div>
+    <div class=\"stat\"><div class=\"label\">点赞数</div><div class=\"value\">{{ game.likes }}</div></div>
+    <div class=\"stat\"><div class=\"label\">创建时间</div><div class=\"value\">{{ game.created }}</div></div>
+    <div class=\"stat\"><div class=\"label\">更新时间</div><div class=\"value\">{{ game.updated }}</div></div>
+  </section>
+  <div class=\"footer\">Roblox 链接：https://www.roblox.com/games/{{ game.place_id }}</div>
+</div>
+</body>
+</html>"""
+
 
 def _load_version() -> str:
     """从 metadata.yaml 读取插件版本号（仅首次读取，失败返回空串）"""
@@ -129,7 +180,7 @@ def _render_menu_sync() -> bytes:
 
     menu_items = [
         ("用户查询", [
-            ("/用户名搜索 [用户名]", "用户资料（官机Markdown / OneBot图文）"),
+            ("/用户名搜索 [用户名]", "官机形象+Markdown / OneBot双图文"),
             ("/用户ID搜索 [数字ID]", "按用户ID直查用户资料"),
         ]),
         ("群组查询", [
@@ -137,8 +188,8 @@ def _render_menu_sync() -> bytes:
             ("/群组ID搜索 [数字ID]", "群组详情与职位列表"),
         ]),
         ("游戏查询", [
-            ("/游戏名搜索 [游戏名]", "搜索游戏、在线人数、访问量"),
-            ("/游戏ID搜索 [数字ID]", "游戏详情（兼容地点ID/游戏ID）"),
+            ("/游戏名搜索 [游戏名]", "OMNI搜索（官机MD / OneBot卡片）"),
+            ("/游戏ID搜索 [数字ID]", "游戏详情（官机MD / OneBot卡片）"),
         ]),
         ("社交查询", [
             ("/获取好友列表 [ID] [页码]", "读取用户好友（每页10个）"),

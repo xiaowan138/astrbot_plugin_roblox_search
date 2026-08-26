@@ -29,7 +29,10 @@ roblox_api.py —— Roblox 查询 API 封装（迁移自 nonebot_plugin_roblox_
 """
 
 import asyncio
+import math
 import urllib.parse
+import uuid
+from difflib import SequenceMatcher
 
 import httpx
 
@@ -359,15 +362,85 @@ async def get_group_icon(gid: int):
 
 # ============ 游戏相关 API ============
 
-async def search_game(name: str):
-    """按名称搜索游戏（关键词做 URL 编码，支持中文/空格）。
+def _compact_game_text(value) -> str:
+    """游戏名称打分用的规范化字符串。"""
+    return "".join(char.lower() for char in str(value or "") if char.isalnum())
 
-    注意：games/list 已被 Roblox 上游下线（404），当前数据源上此功能不可用，
-    调用方需按“未找到/不可用”优雅降级。
+
+def _game_match_score(query: str, candidate: dict) -> float:
+    """按名称相关性、在线人数和点赞数为 OMNI Search 候选评分。"""
+    query_norm = str(query or "").strip().lower()
+    query_key = _compact_game_text(query)
+    name = str(candidate.get("name") or "")
+    name_norm = name.lower()
+    name_key = _compact_game_text(name)
+    if query_norm and name_norm == query_norm:
+        score = 10000.0
+    elif query_key and name_key == query_key:
+        score = 9500.0
+    elif query_norm and name_norm.startswith(query_norm):
+        score = 5200.0
+    elif query_key and name_key.startswith(query_key):
+        score = 4800.0
+    elif query_norm and query_norm in name_norm:
+        score = 3400.0
+    elif query_key and query_key in name_key:
+        score = 2600.0
+    else:
+        score = SequenceMatcher(None, query_norm, name_norm).ratio() * 1500
+    if candidate.get("emphasis"):
+        score += 450
+    if candidate.get("isSponsored"):
+        score -= 1600
+    score += min(math.log10(max(0, int(candidate.get("playerCount", 0))) + 1) * 130, 650)
+    score += min(math.log10(max(0, int(candidate.get("totalUpVotes", 0))) + 1) * 70, 420)
+    return score
+
+
+async def search_game(name: str):
+    """通过 OMNI Search 按名称搜索 Roblox 游戏。
+
+    games/list 已被 Roblox 下线，改用当前网页使用的 search-api/omni-search。
+    返回字段兼容旧调用方：id=universeId、placeId=rootPlaceId。
     """
-    encoded = urllib.parse.quote(name)
-    url = f"https://games.{_BASE_DOMAIN}/v1/games/list?accessFilter=2&keyword={encoded}&limit=10&sortOrder=Relevance"
-    return await http_get(url, retries=1, timeout=SEARCH_TIMEOUT)
+    url = f"https://apis.{_BASE_DOMAIN}/search-api/omni-search"
+    encoded_name = urllib.parse.quote(name)
+    session_id = uuid.uuid4()
+    data = await http_get(
+        f"{url}?searchQuery={encoded_name}&pageToken=&sessionId={session_id}&pageType=all",
+        retries=1,
+        timeout=SEARCH_TIMEOUT,
+    )
+    if not isinstance(data, dict):
+        return {"data": []}
+
+    candidates = []
+    for block in data.get("searchResults", []):
+        if block.get("contentGroupType") != "Game":
+            continue
+        for content in block.get("contents", []):
+            universe_id = content.get("universeId") or content.get("contentId")
+            root_place_id = content.get("rootPlaceId")
+            if not universe_id or not root_place_id:
+                continue
+            try:
+                candidate = {
+                    "id": int(universe_id),
+                    "placeId": int(root_place_id),
+                    "name": content.get("name") or "未知",
+                    "description": content.get("description") or "",
+                    "creatorName": content.get("creatorName") or "未知",
+                    "playerCount": int(content.get("playerCount", 0) or 0),
+                    "totalUpVotes": int(content.get("totalUpVotes", 0) or 0),
+                    "emphasis": bool(content.get("emphasis", False)),
+                    "isSponsored": bool(content.get("isSponsored", False)),
+                }
+            except (TypeError, ValueError):
+                continue
+            candidates.append(candidate)
+
+    candidates.sort(key=lambda item: _game_match_score(name, item), reverse=True)
+    return {"data": candidates[:10]}
 
 
 async def get_game_info_by_universe(universe_id: int, retries: int = MAX_RETRIES):
@@ -384,6 +457,18 @@ async def get_game_info(place_id: int, retries: int = MAX_RETRIES):
     """
     url = f"https://games.{_BASE_DOMAIN}/v1/games?placeIds={place_id}"
     return await http_get(url, retries=retries)
+
+
+async def get_game_votes(universe_id: int):
+    """获取游戏点赞/点踩数据；失败返回空字典。"""
+    url = f"https://games.{_BASE_DOMAIN}/v1/games/votes?universeIds={universe_id}"
+    try:
+        data = await http_get(url, retries=1)
+        if data and data.get("data"):
+            return data["data"][0] or {}
+    except Exception:
+        pass
+    return {}
 
 
 async def get_game_icon(game_id: int):

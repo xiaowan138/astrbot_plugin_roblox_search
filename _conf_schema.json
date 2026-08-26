@@ -12,7 +12,7 @@
     },
     "platform_type": {
         "type": "string",
-        "description": "机器人平台类型（影响图片与消息发送策略）。auto（推荐）按每条消息的来源平台自动识别，同一 AstrBot 同时接入 QQ 官方机器人 + OneBot（NapCat/Lagrange 等）也无需切换；onebot / qq_official 为手动指定。QQ 官方平台：用户查询发送原生 Markdown（不带图片）并省略“正在查询...”中间提示；群组和游戏查询仍发送单图媒体消息。",
+        "description": "机器人平台类型（影响图片与消息发送策略）。auto（推荐）按每条消息的来源平台自动识别，同一 AstrBot 同时接入 QQ 官方机器人 + OneBot（NapCat/Lagrange 等）也无需切换；onebot / qq_official 为手动指定。QQ 官方平台：用户查询依次发送 3D 虚拟形象图片与原生 Markdown 资料卡，游戏查询发送原生 Markdown，并省略“正在查询...”中间提示；图片与 Markdown 会分两条消息发送。",
         "hint": "可选值：auto（默认，推荐）/ onebot / qq_official",
         "default": "auto"
     },
