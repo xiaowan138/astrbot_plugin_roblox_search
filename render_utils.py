@@ -30,8 +30,8 @@ body { margin: 0; padding: 30px; background: radial-gradient(circle at top left,
 .header { padding: 28px 30px 18px; background: linear-gradient(135deg, rgba(59,130,246,.26), rgba(16,185,129,.12)); }
 h1 { margin: 0; font-size: 33px; }
 .sub { margin-top: 8px; color: #cbd5e1; font-size: 16px; }
-.portraits { display: grid; grid-template-columns: 1fr 1fr; margin: 0 30px 22px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; }
-.portrait { min-height: 280px; background: rgba(15,23,42,.72); }
+.portraits { width: calc(100% - 60px); margin: 0 30px 22px; table-layout: fixed; border-collapse: separate; border-spacing: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: rgba(15,23,42,.72); }
+.portrait { width: 50%; height: 280px; padding: 0; vertical-align: top; background: rgba(15,23,42,.72); }
 .portrait + .portrait { border-left: 1px solid rgba(255,255,255,.16); }
 .portrait-title { padding: 12px 16px; background: rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.14); font-size: 18px; font-weight: 700; }
 .portrait-image { width: 100%; height: 235px; object-fit: contain; display: block; padding: 12px; }
@@ -55,10 +55,10 @@ ul { margin: 0; padding-left: 22px; color: #e2e8f0; line-height: 1.9; }
 <body>
 <div class=\"card\">
   <header class=\"header\"><h1>Roblox 用户信息</h1><div class=\"sub\">{{ user.name_line }}</div></header>
-  <section class=\"portraits\">
-    <div class=\"portrait\"><div class=\"portrait-title\">头像</div>{% if user.headshot_url %}<img class=\"portrait-image\" src=\"{{ user.headshot_url }}\" alt=\"头像\">{% else %}<div class=\"placeholder\">头像暂不可用</div>{% endif %}</div>
-    <div class=\"portrait\"><div class=\"portrait-title\">虚拟形象</div>{% if user.avatar_url %}<img class=\"portrait-image\" src=\"{{ user.avatar_url }}\" alt=\"虚拟形象\">{% else %}<div class=\"placeholder\">虚拟形象暂不可用</div>{% endif %}</div>
-  </section>
+  <table class=\"portraits\" aria-label=\"Roblox 头像与虚拟形象\"><tbody><tr>
+    <td class=\"portrait\"><div class=\"portrait-title\">头像</div>{% if user.headshot_url %}<img class=\"portrait-image\" src=\"{{ user.headshot_url }}\" alt=\"头像\" width=\"420\" height=\"235\">{% else %}<div class=\"placeholder\">头像暂不可用</div>{% endif %}</td>
+    <td class=\"portrait\"><div class=\"portrait-title\">3D 虚拟形象</div>{% if user.avatar_url %}<img class=\"portrait-image\" src=\"{{ user.avatar_url }}\" alt=\"3D 虚拟形象\" width=\"420\" height=\"235\">{% else %}<div class=\"placeholder\">虚拟形象暂不可用</div>{% endif %}</td>
+  </tr></tbody></table>
   <section class=\"stats\">
     <div class=\"stat\"><div class=\"label\">好友</div><div class=\"value\">{{ user.friends }}</div></div>
     <div class=\"stat\"><div class=\"label\">关注</div><div class=\"value\">{{ user.following }}</div></div>

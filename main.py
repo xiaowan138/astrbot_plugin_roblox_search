@@ -676,30 +676,6 @@ class RobloxSearchPlugin(Star):
                 gid = group.get("group", {}).get("id", 0)
                 return f"{group_name}（职位：{role}，ID：{gid}）"
 
-            if platform == "qq_official":
-                headshot_image = self._qq_markdown_image("头像", headshot_url, 180, 180)
-                avatar_image = self._qq_markdown_image("虚拟形象", avatar_url, 300, 300)
-                markdown = _build_qq_user_markdown(
-                    raw_name=raw_name,
-                    display_name=display_name,
-                    user_id=user_id,
-                    created_date=created_date,
-                    age_info=age_info,
-                    friend_count=friend_text,
-                    follower_count=follower_text,
-                    following_count=following_text,
-                    online_status=online_status,
-                    location=location,
-                    is_banned=is_banned,
-                    verified=verified,
-                    description=description,
-                    groups=groups,
-                    headshot_image=headshot_image,
-                    avatar_image=avatar_image,
-                )
-                yield self._qq_markdown(event, markdown)
-                return
-
             name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
             user_card = {
                 "name_line": html.escape(name_line),
@@ -718,17 +694,17 @@ class RobloxSearchPlugin(Star):
                 "description": html.escape((description or "无")[:500]),
                 "groups": [html.escape(_group_text(group)) for group in groups[:5]],
             }
+            # 所有平台优先使用同一张 HTML 用户卡，保证头像与 3D 形象稳定处于真正的表格单元格内。
             card_url = await self._render_html_card(USER_CARD_TEMPLATE, {"user": user_card})
             if card_url:
                 yield event.image_result(card_url)
                 return
 
-            # HTML 生图不可用时再回退：官机分两条发送图片与 Markdown，
+            # HTML 生图不可用时再回退：官机使用原生 Markdown 双栏表格，
             # OneBot 保持原有的头像框 + 形象图 + 纯文本图文链。
             if platform == "qq_official":
-                avatar_path = await _download_to_temp(avatar_url) if avatar_url else None
-                if avatar_path:
-                    yield self._chain(event, [Image.fromFileSystem(avatar_path)])
+                headshot_image = self._qq_markdown_image("头像", headshot_url, 180, 180)
+                avatar_image = self._qq_markdown_image("3D 虚拟形象", avatar_url, 300, 300)
                 markdown = _build_qq_user_markdown(
                     raw_name=raw_name,
                     display_name=display_name,
@@ -744,6 +720,8 @@ class RobloxSearchPlugin(Star):
                     verified=verified,
                     description=description,
                     groups=groups,
+                    headshot_image=headshot_image,
+                    avatar_image=avatar_image,
                 )
                 yield self._qq_markdown(event, markdown)
                 return
