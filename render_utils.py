@@ -18,7 +18,68 @@ _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_CACHE = {}
 _VERSION = ""
 
-# 由 AstrBot Star.html_render 渲染的 OneBot 游戏信息卡。动态值在调用方已做 HTML 转义。
+# 由 AstrBot Star.html_render 渲染的用户信息卡。动态值在调用方已做 HTML 转义。
+USER_CARD_TEMPLATE = """<!DOCTYPE html>
+<html lang=\"zh-CN\">
+<head>
+<meta charset=\"UTF-8\">
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; padding: 30px; background: radial-gradient(circle at top left, #334155, #111827 55%, #0f172a); color: #f8fafc; font-family: \"Microsoft YaHei\", \"PingFang SC\", sans-serif; }
+.card { width: 960px; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 24px; background: rgba(30,41,59,.94); box-shadow: 0 18px 52px rgba(0,0,0,.4); }
+.header { padding: 28px 30px 18px; background: linear-gradient(135deg, rgba(59,130,246,.26), rgba(16,185,129,.12)); }
+h1 { margin: 0; font-size: 33px; }
+.sub { margin-top: 8px; color: #cbd5e1; font-size: 16px; }
+.portraits { display: grid; grid-template-columns: 1fr 1fr; margin: 0 30px 22px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; }
+.portrait { min-height: 280px; background: rgba(15,23,42,.72); }
+.portrait + .portrait { border-left: 1px solid rgba(255,255,255,.16); }
+.portrait-title { padding: 12px 16px; background: rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.14); font-size: 18px; font-weight: 700; }
+.portrait-image { width: 100%; height: 235px; object-fit: contain; display: block; padding: 12px; }
+.placeholder { height: 235px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 16px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 30px 22px; }
+.stat { padding: 15px; border: 1px solid rgba(255,255,255,.11); border-radius: 15px; background: rgba(255,255,255,.05); }
+.label { color: #94a3b8; font-size: 13px; }
+.value { margin-top: 6px; font-size: 20px; font-weight: 700; }
+.info { padding: 0 30px 24px; }
+.row { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.08); line-height: 1.6; }
+.row:last-child { border-bottom: none; }
+.key { color: #cbd5e1; font-weight: 700; display: inline-block; min-width: 112px; }
+.code { padding: 2px 8px; border-radius: 7px; background: rgba(255,255,255,.12); font-family: Consolas, monospace; }
+.section { margin: 0 30px 24px; padding: 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; background: rgba(15,23,42,.45); }
+.section h2 { margin: 0 0 12px; font-size: 19px; }
+.description { margin: 0; color: #dbeafe; line-height: 1.7; white-space: pre-wrap; }
+ul { margin: 0; padding-left: 22px; color: #e2e8f0; line-height: 1.9; }
+.footer { padding: 0 30px 28px; color: #94a3b8; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class=\"card\">
+  <header class=\"header\"><h1>Roblox 用户信息</h1><div class=\"sub\">{{ user.name_line }}</div></header>
+  <section class=\"portraits\">
+    <div class=\"portrait\"><div class=\"portrait-title\">头像</div>{% if user.headshot_url %}<img class=\"portrait-image\" src=\"{{ user.headshot_url }}\" alt=\"头像\">{% else %}<div class=\"placeholder\">头像暂不可用</div>{% endif %}</div>
+    <div class=\"portrait\"><div class=\"portrait-title\">虚拟形象</div>{% if user.avatar_url %}<img class=\"portrait-image\" src=\"{{ user.avatar_url }}\" alt=\"虚拟形象\">{% else %}<div class=\"placeholder\">虚拟形象暂不可用</div>{% endif %}</div>
+  </section>
+  <section class=\"stats\">
+    <div class=\"stat\"><div class=\"label\">好友</div><div class=\"value\">{{ user.friends }}</div></div>
+    <div class=\"stat\"><div class=\"label\">关注</div><div class=\"value\">{{ user.following }}</div></div>
+    <div class=\"stat\"><div class=\"label\">粉丝</div><div class=\"value\">{{ user.followers }}</div></div>
+  </section>
+  <section class=\"info\">
+    <div class=\"row\"><span class=\"key\">用户 ID</span><span class=\"code\">{{ user.id }}</span></div>
+    <div class=\"row\"><span class=\"key\">创建时间</span>{{ user.created }}</div>
+    <div class=\"row\"><span class=\"key\">注册时长</span>{{ user.age }}</div>
+    <div class=\"row\"><span class=\"key\">在线状态</span>{{ user.status }}</div>
+    <div class=\"row\"><span class=\"key\">当前位置</span>{{ user.location }}</div>
+    <div class=\"row\"><span class=\"key\">是否封禁</span>{{ user.banned }}　　<span class=\"key\">已认证</span>{{ user.verified }}</div>
+  </section>
+  <section class=\"section\"><h2>用户简介</h2><p class=\"description\">{{ user.description }}</p></section>
+  <section class=\"section\"><h2>群组列表</h2>{% if user.groups %}<ul>{% for group in user.groups %}<li>{{ group }}</li>{% endfor %}</ul>{% else %}<p class=\"description\">暂无公开群组</p>{% endif %}</section>
+  <footer class=\"footer\">Roblox 全功能查询插件</footer>
+</div>
+</body>
+</html>"""
+
+# 由 AstrBot Star.html_render 渲染的游戏信息卡。动态值在调用方已做 HTML 转义。
 GAME_CARD_TEMPLATE = """<!DOCTYPE html>
 <html lang=\"zh-CN\">
 <head>
@@ -30,6 +91,7 @@ body { margin: 0; padding: 32px; background: radial-gradient(circle at top right
 .hero { display: flex; gap: 26px; padding: 28px; background: linear-gradient(135deg, rgba(59,130,246,.24), rgba(16,185,129,.12)); }
 .icon { width: 220px; height: 220px; flex: 0 0 220px; overflow: hidden; border-radius: 20px; background: #1e293b; border: 1px solid rgba(255,255,255,.16); }
 .icon img { width: 100%; height: 100%; object-fit: cover; }
+.placeholder { height: 100%; display: flex; align-items: center; justify-content: center; color: #94a3b8; text-align: center; padding: 16px; }
 h1 { margin: 0 0 14px; font-size: 34px; line-height: 1.25; }
 .meta { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
 .tag { padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.11); font-size: 14px; }
@@ -44,7 +106,7 @@ h1 { margin: 0 0 14px; font-size: 34px; line-height: 1.25; }
 <body>
 <div class=\"card\">
   <section class=\"hero\">
-    <div class=\"icon\"><img src=\"{{ game.image_url }}\" alt=\"游戏图标\"></div>
+    <div class=\"icon\">{% if game.image_url %}<img src=\"{{ game.image_url }}\" alt=\"游戏封面\">{% else %}<div class=\"placeholder\">游戏封面暂不可用</div>{% endif %}</div>
     <div>
       <h1>{{ game.name }}</h1>
       <div class=\"meta\">
@@ -180,7 +242,7 @@ def _render_menu_sync() -> bytes:
 
     menu_items = [
         ("用户查询", [
-            ("/用户名搜索 [用户名]", "官机形象+Markdown / OneBot双图文"),
+            ("/用户名搜索 [用户名]", "单张用户信息卡（全平台）"),
             ("/用户ID搜索 [数字ID]", "按用户ID直查用户资料"),
         ]),
         ("群组查询", [
@@ -188,8 +250,8 @@ def _render_menu_sync() -> bytes:
             ("/群组ID搜索 [数字ID]", "群组详情与职位列表"),
         ]),
         ("游戏查询", [
-            ("/游戏名搜索 [游戏名]", "OMNI搜索（官机MD / OneBot卡片）"),
-            ("/游戏ID搜索 [数字ID]", "游戏详情（官机MD / OneBot卡片）"),
+            ("/游戏名搜索 [游戏名]", "OMNI搜索 + 单张游戏信息卡"),
+            ("/游戏ID搜索 [数字ID]", "游戏详情 + 单张游戏信息卡"),
         ]),
         ("社交查询", [
             ("/获取好友列表 [ID] [页码]", "读取用户好友（每页10个）"),

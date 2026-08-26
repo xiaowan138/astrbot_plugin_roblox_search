@@ -3,10 +3,10 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
 
 由 NoneBot2 插件 nonebot_plugin_roblox_search (v1.3.5) 迁移并增强而来。
 在保留原插件全部查询功能的基础上：
-- 重新设计了输出格式：OneBot 使用纯文本图文链，QQ 官方机器人用户查询使用原生 Markdown
+- 重新设计了输出格式：用户/游戏查询优先生成单张完整信息卡，兼容 OneBot 与 QQ 官方机器人
 - 修复原插件 bug：群组/游戏名搜索未做 URL 编码（中文/空格关键词会失败）、
   游戏 ID 查询不兼容 universeId、同步 requests 阻塞事件循环等
-- 增强：认证徽章、官机原生 Markdown 资料卡、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
+- 增强：认证徽章、OMNI 游戏搜索、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
 
 功能命令（均可带 / 前缀触发，无斜杠触发可在配置中关闭）：
     菜单 / 帮助 / menu          查看功能菜单（图片）
@@ -65,7 +65,7 @@ from .roblox_api import (
     search_user,
     set_base_domain,
 )
-from .render_utils import GAME_CARD_TEMPLATE, menu_to_image
+from .render_utils import GAME_CARD_TEMPLATE, USER_CARD_TEMPLATE, menu_to_image
 
 # 非白名单群的拒绝提示（与原插件一致）
 WHITELIST_MSG = "此群未获得账号所有者的允许，未开放此群白名单，暂时不开使用，请联系账号所有者"
@@ -439,12 +439,21 @@ class RobloxSearchPlugin(Star):
         output += f"\n【游戏描述】\n{game['description'][:300]}{'......' if len(game['description']) > 300 else ''}"
         return _truncate(output)
 
-    async def _render_game_result(self, event: AstrMessageEvent, game: dict, title: str):
-        """按平台渲染游戏结果：官机 Markdown，OneBot HTML 卡片并带图文回退。"""
-        if self._resolve_platform(event) == "qq_official":
-            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
-            return
+    async def _render_html_card(self, template: str, data: dict) -> str | None:
+        """渲染单张 PNG 信息卡；失败返回 None，由业务层决定平台回退方式。"""
+        try:
+            image_url = await self.html_render(
+                template,
+                data,
+                options={"type": "png", "full_page": True, "animations": "disabled"},
+            )
+            return image_url or None
+        except Exception as e:
+            logger.warning(f"[Roblox] 信息卡渲染失败: {e}")
+            return None
 
+    async def _render_game_result(self, event: AstrMessageEvent, game: dict, title: str):
+        """优先输出单张游戏信息卡；失败时按平台分别回退。"""
         template_game = {
             "image_url": html.escape(game["icon_url"], quote=True),
             "name": html.escape(game["name"]),
@@ -460,20 +469,19 @@ class RobloxSearchPlugin(Star):
             "created": game["created"],
             "updated": game["updated"],
         }
-        try:
-            image_url = await self.html_render(
-                GAME_CARD_TEMPLATE,
-                {"game": template_game},
-                options={"type": "png", "full_page": True, "animations": "disabled"},
-            )
-            if image_url:
-                yield event.image_result(image_url)
-                return
-        except Exception as e:
-            logger.warning(f"[Roblox] 游戏卡片渲染失败，回退图文链: {e}")
+        image_url = await self._render_html_card(GAME_CARD_TEMPLATE, {"game": template_game})
+        if image_url:
+            yield event.image_result(image_url)
+            return
+
+        icon_path = await _download_to_temp(game["icon_url"]) if game["icon_url"] else None
+        if self._resolve_platform(event) == "qq_official":
+            if icon_path:
+                yield self._chain(event, [Image.fromFileSystem(icon_path)])
+            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
+            return
 
         chain = []
-        icon_path = await _download_to_temp(game["icon_url"]) if game["icon_url"] else None
         if icon_path:
             chain.append(Image.fromFileSystem(icon_path))
         chain.append(Plain(self._build_game_plain_text(game, title)))
@@ -546,9 +554,10 @@ class RobloxSearchPlugin(Star):
             yield res
 
     async def _user_query(self, event: AstrMessageEvent, user_id: int, source: str):
-        """用户详情查询（用户名搜索 / 用户ID搜索共用）"""
-        if self._show_progress(event):
-            yield self._plain(event, "正在查询用户信息，请稍候...")
+        """用户详情查询（用户名搜索 / 用户ID搜索共用）。
+
+        用户资料主路径输出单张信息卡，因此不额外发送进度消息。
+        """
         total_start = time.time()
         try:
             details = await get_user_details(user_id)
@@ -581,19 +590,14 @@ class RobloxSearchPlugin(Star):
             friend_count = _safe(2, None)
             follower_count = _safe(3, None)
             following_count = _safe(4, None)
-            avatar_url = ""
-            headshot_url = ""
-            if platform == "qq_official":
-                avatar_result = await get_avatar_url(user_id)
-                avatar_url = "" if isinstance(avatar_result, Exception) else (avatar_result or "")
-            else:
-                avatar_result, headshot_result = await asyncio.gather(
-                    get_avatar_url(user_id),
-                    get_headshot_url(user_id),
-                    return_exceptions=True,
-                )
-                avatar_url = "" if isinstance(avatar_result, Exception) else (avatar_result or "")
-                headshot_url = "" if isinstance(headshot_result, Exception) else (headshot_result or "")
+            # 主路径为单张 HTML 信息卡，所有平台都需要头像框和 3D 虚拟形象。
+            avatar_result, headshot_result = await asyncio.gather(
+                get_avatar_url(user_id),
+                get_headshot_url(user_id),
+                return_exceptions=True,
+            )
+            avatar_url = "" if isinstance(avatar_result, Exception) else (avatar_result or "")
+            headshot_url = "" if isinstance(headshot_result, Exception) else (headshot_result or "")
 
             online_status, location = _parse_presence(status)
             created_date, age_info = _calc_age(_parse_date(created_raw))
@@ -606,11 +610,38 @@ class RobloxSearchPlugin(Star):
             following_text = _num_or_unknown(following_count)
             verified = details.get("hasVerifiedBadge") if "hasVerifiedBadge" in details else None
 
-            # QQ 官方 Markdown 与媒体组件不能出现在同一条高层消息链中；
-            # 官机在此直接返回纯 Markdown，避免适配器降级为 msg_type=7 富媒体消息。
+            def _group_text(group):
+                group_name = group.get("group", {}).get("name", "未知")
+                role = group.get("role", {}).get("name", "未知")
+                gid = group.get("group", {}).get("id", 0)
+                return f"{group_name}（职位：{role}，ID：{gid}）"
+
+            name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
+            user_card = {
+                "name_line": html.escape(name_line),
+                "headshot_url": html.escape(headshot_url, quote=True),
+                "avatar_url": html.escape(avatar_url, quote=True),
+                "friends": friend_text,
+                "following": following_text,
+                "followers": follower_text,
+                "id": user_id,
+                "created": created_date or "未知",
+                "age": html.escape(age_info or "未知"),
+                "status": html.escape(online_status),
+                "location": html.escape(location),
+                "banned": "是" if is_banned else "否",
+                "verified": "未知" if verified is None else ("是" if verified else "否"),
+                "description": html.escape((description or "无")[:500]),
+                "groups": [html.escape(_group_text(group)) for group in groups[:5]],
+            }
+            card_url = await self._render_html_card(USER_CARD_TEMPLATE, {"user": user_card})
+            if card_url:
+                yield event.image_result(card_url)
+                return
+
+            # HTML 生图不可用时再回退：官机分两条发送图片与 Markdown，
+            # OneBot 保持原有的头像框 + 形象图 + 纯文本图文链。
             if platform == "qq_official":
-                # QQ 原生 Markdown 不能与 Image 同链：先独立发送一张 3D 虚拟形象，
-                # 再单独发送 Markdown 资料卡；图片失败不影响资料输出。
                 avatar_path = await _download_to_temp(avatar_url) if avatar_url else None
                 if avatar_path:
                     yield self._chain(event, [Image.fromFileSystem(avatar_path)])
@@ -831,8 +862,6 @@ class RobloxSearchPlugin(Star):
         if not name:
             yield self._plain(event, "请输入游戏名，例：/游戏名搜索 Adopt Me")
             return
-        if self._show_progress(event):
-            yield self._plain(event, "正在搜索游戏，请稍候...")
         try:
             search_result = await search_game(name)
             games = search_result.get("data", []) if search_result else []
@@ -881,8 +910,6 @@ class RobloxSearchPlugin(Star):
             yield self._plain(event, "请输入有效的游戏ID（纯数字），例：/游戏ID搜索 292439477")
             return
         gid = int(gid_str)
-        if self._show_progress(event):
-            yield self._plain(event, "正在查询游戏信息，请稍候...")
         try:
             # 兼容输入 placeId/universeId：优先按 universeId，失败后按 placeId 兜底。
             uni_info, place_info = await asyncio.gather(
