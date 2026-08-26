@@ -3,10 +3,10 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
 
 由 NoneBot2 插件 nonebot_plugin_roblox_search (v1.3.5) 迁移并增强而来。
 在保留原插件全部查询功能的基础上：
-- 重新设计了输出格式（纯文本 + 中文标点排版，无 Markdown 敏感字符，跨平台安全）
+- 重新设计了输出格式：OneBot 使用纯文本图文链，QQ 官方机器人用户查询使用原生 Markdown
 - 修复原插件 bug：群组/游戏名搜索未做 URL 编码（中文/空格关键词会失败）、
   游戏 ID 查询不兼容 universeId、同步 requests 阻塞事件循环等
-- 增强：认证徽章/会员标识、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
+- 增强：认证徽章、官机原生 Markdown 资料卡、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
 
 功能命令（均可带 / 前缀触发，无斜杠触发可在配置中关闭）：
     菜单 / 帮助 / menu          查看功能菜单（图片）
@@ -187,6 +187,70 @@ def _parse_presence(status):
     return online_status, location
 
 
+def _escape_qq_markdown(value) -> str:
+    """转义来自 Roblox API 的动态文本，避免破坏 QQ Markdown 排版。"""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    escaped = "\\`*_{}[]<>()#+-.!|~"
+    return "".join(f"\\{char}" if char in escaped else char for char in text)
+
+
+def _build_qq_user_markdown(
+    raw_name: str,
+    display_name: str,
+    user_id: int,
+    created_date: str,
+    age_info: str,
+    friend_count: str,
+    follower_count: str,
+    following_count: str,
+    online_status: str,
+    location: str,
+    is_banned: bool,
+    verified: bool | None,
+    description: str,
+    groups: list,
+) -> str:
+    """构造 QQ 官方机器人原生 Markdown 用户资料，不包含媒体组件。"""
+    inline = lambda value: _escape_qq_markdown(value).replace("\n", " ")
+    lines = ["# Roblox 用户信息", f"**用户名：** `{inline(raw_name)}`"]
+    if display_name and display_name != raw_name:
+        lines.append(f"**展示名：** {inline(display_name)}")
+    lines.extend([
+        f"**关注｜粉丝｜好友：** `{following_count}` ｜ `{follower_count}` ｜ `{friend_count}`",
+        f"**用户 ID：** `{user_id}`",
+    ])
+    if created_date:
+        lines.extend([
+            f"**注册日期：** `{created_date}`",
+            f"**注册时长：** {inline(age_info)}",
+        ])
+    lines.extend([
+        f"**在线状态：** {inline(online_status)}",
+        f"**当前位置：** {inline(location)}",
+        f"**是否封禁：** {'是' if is_banned else '否'}",
+    ])
+    if verified is not None:
+        lines.append(f"**已认证：** {'是' if verified else '否'}")
+
+    if description:
+        desc = _escape_qq_markdown(description[:500]).replace("\n", "  \n")
+        suffix = "……" if len(description) > 500 else ""
+        lines.extend(["## 用户简介", f"{desc}{suffix}"])
+    else:
+        lines.extend(["## 用户简介", "无"])
+
+    lines.append("## 群组列表")
+    if groups:
+        for group in groups[:5]:
+            group_name = inline(group.get("group", {}).get("name", "未知"))
+            role = inline(group.get("role", {}).get("name", "未知"))
+            gid = group.get("group", {}).get("id", 0)
+            lines.append(f"- **{group_name}**（职位：{role}，ID：`{gid}`）")
+    else:
+        lines.append("- 暂无公开群组")
+    return _truncate("\n\n".join(lines))
+
+
 async def _download_to_temp(url: str, suffix: str = ".png") -> str | None:
     """下载图片到临时文件，返回路径；失败返回 None"""
     try:
@@ -318,6 +382,10 @@ class RobloxSearchPlugin(Star):
         """纯文本输出：强制关闭 Markdown 渲染，避免动态内容里的 # * | 等被平台解析"""
         return event.plain_result(text).use_markdown(False)
 
+    def _qq_markdown(self, event: AstrMessageEvent, text: str):
+        """QQ 官方机器人原生 Markdown 输出；调用方不得混入 Image 等媒体组件。"""
+        return event.plain_result(text).use_markdown(True)
+
     def _chain(self, event: AstrMessageEvent, chain):
         """图文消息输出：强制关闭 Markdown 渲染（不影响图片发送）"""
         return event.chain_result(chain).use_markdown(False)
@@ -385,14 +453,13 @@ class RobloxSearchPlugin(Star):
             is_banned = details.get("isBanned", False)
             description = details.get("description", "")
 
+            platform = self._resolve_platform(event)
             results = await asyncio.gather(
                 get_user_presence(user_id),
                 get_user_groups(user_id),
                 get_friend_count(user_id),
                 get_follower_count(user_id),
                 get_following_count(user_id),
-                get_avatar_url(user_id),
-                get_headshot_url(user_id),
                 return_exceptions=True,
             )
 
@@ -405,14 +472,49 @@ class RobloxSearchPlugin(Star):
             friend_count = _safe(2, None)
             follower_count = _safe(3, None)
             following_count = _safe(4, None)
-            avatar_url = _safe(5, "") or ""
-            headshot_url = _safe(6, "") or ""
+            avatar_url = ""
+            headshot_url = ""
+            if platform != "qq_official":
+                avatar_result, headshot_result = await asyncio.gather(
+                    get_avatar_url(user_id),
+                    get_headshot_url(user_id),
+                    return_exceptions=True,
+                )
+                avatar_url = "" if isinstance(avatar_result, Exception) else (avatar_result or "")
+                headshot_url = "" if isinstance(headshot_result, Exception) else (headshot_result or "")
 
             online_status, location = _parse_presence(status)
             created_date, age_info = _calc_age(_parse_date(created_raw))
 
             def _num_or_unknown(v):
                 return "未知" if v is None else f"{v:,}"
+
+            friend_text = _num_or_unknown(friend_count)
+            follower_text = _num_or_unknown(follower_count)
+            following_text = _num_or_unknown(following_count)
+            verified = details.get("hasVerifiedBadge") if "hasVerifiedBadge" in details else None
+
+            # QQ 官方 Markdown 与媒体组件不能出现在同一条高层消息链中；
+            # 官机在此直接返回纯 Markdown，避免适配器降级为 msg_type=7 富媒体消息。
+            if platform == "qq_official":
+                markdown = _build_qq_user_markdown(
+                    raw_name=raw_name,
+                    display_name=display_name,
+                    user_id=user_id,
+                    created_date=created_date,
+                    age_info=age_info,
+                    friend_count=friend_text,
+                    follower_count=follower_text,
+                    following_count=following_text,
+                    online_status=online_status,
+                    location=location,
+                    is_banned=is_banned,
+                    verified=verified,
+                    description=description,
+                    groups=groups,
+                )
+                yield self._qq_markdown(event, markdown)
+                return
 
             output = "【Roblox 用户信息】\n"
             output += f"用户名：{raw_name}\n"
@@ -422,12 +524,12 @@ class RobloxSearchPlugin(Star):
             if created_date:
                 output += f"注册日期：{created_date}\n"
                 output += f"注册时长：{age_info}\n"
-            output += f"好友：{_num_or_unknown(friend_count)} ｜ 关注：{_num_or_unknown(following_count)} ｜ 粉丝：{_num_or_unknown(follower_count)}\n"
+            output += f"好友：{friend_text} ｜ 关注：{following_text} ｜ 粉丝：{follower_text}\n"
             output += f"在线状态：{online_status}\n"
             output += f"当前位置：{location}\n"
             output += f"账号封禁：{'是' if is_banned else '否'}\n"
-            if "hasVerifiedBadge" in details:
-                output += f"已认证：{'是' if details.get("hasVerifiedBadge") else '否'}\n"
+            if verified is not None:
+                output += f"已认证：{'是' if verified else '否'}\n"
 
             if description:
                 output += "\n【用户简介】\n"
@@ -446,13 +548,8 @@ class RobloxSearchPlugin(Star):
 
             output = _truncate(output)
 
-            # 头像框 + 形象图在前，文本在后。
-            # QQ 官方机器人平台一条消息只能带一张图，多图会被适配器强制拆成多条；
-            # 该平台只发形象图，避免"一块一块"地散开发送。其余平台保持头像框+形象图两张。
-            if self._resolve_platform(event) == "qq_official":
-                image_urls = [avatar_url]
-            else:
-                image_urls = [headshot_url, avatar_url]
+            # OneBot 等非官机平台保持头像框 + 形象图在前、纯文本在后。
+            image_urls = [headshot_url, avatar_url]
             paths = await asyncio.gather(*(_download_to_temp(u) for u in image_urls if u))
             chain = [Image.fromFileSystem(p) for p in paths if p]
             chain.append(Plain(output))
