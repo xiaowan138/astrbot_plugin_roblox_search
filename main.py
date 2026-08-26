@@ -536,7 +536,13 @@ class RobloxSearchPlugin(Star):
         proxy = self.qq_markdown_image_proxy.rstrip("/")
         parsed = urlsplit(url)
         if proxy and parsed.hostname and parsed.hostname.endswith("rbxcdn.com"):
-            display_url = f"{proxy}/?url={quote(url, safe='')}&w={width}&h={height}&fit=contain&output=png"
+            # 按 QQ 官方 Markdown 常见兼容写法，仅编码代理参数中的特殊字符，
+            # 保留协议和路径斜杠，避免 QQ 客户端拒绝完整百分号编码的图片源。
+            source = url.removeprefix("https://").removeprefix("http://")
+            display_url = (
+                f"{proxy}/?url={quote(source, safe='/:._~-')}"
+                f"&w={width}&h={height}&fit=contain&output=png"
+            )
         if not _is_safe_markdown_image_url(display_url):
             return ""
         safe_alt = _escape_qq_markdown(alt).replace("\n", " ")
