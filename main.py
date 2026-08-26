@@ -676,32 +676,7 @@ class RobloxSearchPlugin(Star):
                 gid = group.get("group", {}).get("id", 0)
                 return f"{group_name}（职位：{role}，ID：{gid}）"
 
-            name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
-            user_card = {
-                "name_line": html.escape(name_line),
-                "headshot_url": html.escape(headshot_url, quote=True),
-                "avatar_url": html.escape(avatar_url, quote=True),
-                "friends": friend_text,
-                "following": following_text,
-                "followers": follower_text,
-                "id": user_id,
-                "created": created_date or "未知",
-                "age": html.escape(age_info or "未知"),
-                "status": html.escape(online_status),
-                "location": html.escape(location),
-                "banned": "是" if is_banned else "否",
-                "verified": "未知" if verified is None else ("是" if verified else "否"),
-                "description": html.escape((description or "无")[:500]),
-                "groups": [html.escape(_group_text(group)) for group in groups[:5]],
-            }
-            # 所有平台优先使用同一张 HTML 用户卡，保证头像与 3D 形象稳定处于真正的表格单元格内。
-            card_url = await self._render_html_card(USER_CARD_TEMPLATE, {"user": user_card})
-            if card_url:
-                yield event.image_result(card_url)
-                return
-
-            # HTML 生图不可用时再回退：官机使用原生 Markdown 双栏表格，
-            # OneBot 保持原有的头像框 + 形象图 + 纯文本图文链。
+            # QQ 官方机器人必须保持原生 Markdown 输出；头像和 3D 形象放在双栏表格中。
             if platform == "qq_official":
                 headshot_image = self._qq_markdown_image("头像", headshot_url, 180, 180)
                 avatar_image = self._qq_markdown_image("3D 虚拟形象", avatar_url, 300, 300)
@@ -724,6 +699,30 @@ class RobloxSearchPlugin(Star):
                     avatar_image=avatar_image,
                 )
                 yield self._qq_markdown(event, markdown)
+                return
+
+            name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
+            user_card = {
+                "name_line": html.escape(name_line),
+                "headshot_url": html.escape(headshot_url, quote=True),
+                "avatar_url": html.escape(avatar_url, quote=True),
+                "friends": friend_text,
+                "following": following_text,
+                "followers": follower_text,
+                "id": user_id,
+                "created": created_date or "未知",
+                "age": html.escape(age_info or "未知"),
+                "status": html.escape(online_status),
+                "location": html.escape(location),
+                "banned": "是" if is_banned else "否",
+                "verified": "未知" if verified is None else ("是" if verified else "否"),
+                "description": html.escape((description or "无")[:500]),
+                "groups": [html.escape(_group_text(group)) for group in groups[:5]],
+            }
+            # OneBot 等非官机平台使用同一张 HTML 用户卡，保证头像与 3D 形象稳定处于真正的表格单元格内。
+            card_url = await self._render_html_card(USER_CARD_TEMPLATE, {"user": user_card})
+            if card_url:
+                yield event.image_result(card_url)
                 return
 
             output = "【Roblox 用户信息】\n"

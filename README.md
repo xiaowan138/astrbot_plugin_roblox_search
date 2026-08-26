@@ -51,7 +51,7 @@
 
 所有命令也可不带 `/` 直接触发（如发送 `用户名搜索 Roblox`），可在配置中关闭。普通错误和参数提示使用纯文本；用户查询会按平台选择对应的输出方式。
 
-**平台兼容**：同时兼容 **QQ 官方机器人（官机）** 与 **OneBot**（NapCat / Lagrange / LLOneBot 等）以及 Telegram、Discord 等其他 AstrBot 支持的平台。默认 `auto` 按每条消息来源自动适配：用户查询优先生成一张 HTML 信息卡，头像与 3D 虚拟形象在同一张双栏表格中；官机的游戏查询仍使用带封面的原生 Markdown。HTML 生图不可用时，官机回退到图片 Markdown 表格，OneBot 等平台回退到头像/形象图文链。
+**平台兼容**：同时兼容 **QQ 官方机器人（官机）** 与 **OneBot**（NapCat / Lagrange / LLOneBot 等）以及 Telegram、Discord 等其他 AstrBot 支持的平台。默认 `auto` 按每条消息来源自动适配：QQ 官机用户查询使用原生 Markdown，头像与 3D 虚拟形象嵌入双栏表格；OneBot 等平台优先生成一张 HTML 表格信息卡。官机的游戏查询仍使用带封面的原生 Markdown，其他平台在生图失败时回退到头像/形象图文链。
 
 ## 安装
 
@@ -74,7 +74,7 @@
 - **`platform_type`**（平台类型，默认 `auto`）
   - `auto`：**按每条消息的来源平台自动识别**（推荐），同一个 AstrBot 同时接入 QQ 官方机器人 + OneBot 也无需手动切换，两边各自适配；
   - `onebot`：手动指定 OneBot（NapCat / Lagrange 等），用户查询优先发送包含头像与 3D 形象的单张表格卡；生图失败时才发送两张图片和文本；
-  - `qq_official`：手动指定 QQ 官方机器人。用户查询优先发送单张 HTML 信息卡，头像和 3D 虚拟形象使用双栏表格排版；生图不可用时回退到原生 Markdown 表格。游戏查询以原生 Markdown 嵌入游戏封面，并省略「正在查询...」中间提示。
+  - `qq_official`：手动指定 QQ 官方机器人。用户查询始终使用原生 Markdown，头像和 3D 虚拟形象以双栏表格嵌入；游戏查询以原生 Markdown 嵌入游戏封面，并省略「正在查询...」中间提示。
 - **`api_base_domain`**（数据源代理域名，默认 `rotunnel.com`）
   - 只填域名本身，不带 `https://` 和路径；
   - 默认代理不可用时可换 `roproxy.com` 或自建反代域名，无需改代码。
@@ -89,13 +89,13 @@
 ### v1.8.0（2026-08-26）
 
 **用户资料表格化输出：**
-- 用户资料卡统一使用真正的 HTML 双栏表格并渲染为单张图片，头像与 3D 虚拟形象不会再因 QQ Markdown 表格兼容性问题被拆开
-- HTML 生图不可用时，官机仍回退为原生 Markdown，并保留图片表格和完整资料字段
+- QQ 官方机器人保持原生 Markdown 输出，头像与 3D 虚拟形象使用双栏表格嵌入
+- OneBot 等非官机平台使用真正的 HTML 双栏表格并渲染为单张图片
 - 游戏资料标题下新增游戏封面 Markdown 图片，随后展示游戏统计、简介和 Roblox 链接
 - 默认通过 `images.weserv.nl` 代理 Roblox CDN 缩略图，提高 QQ 客户端显示成功率；可用 `qq_markdown_image_proxy` 配置切换或关闭
-- QQ 官方机器人、OneBot 与其他平台的用户查询统一使用单张 HTML 信息卡主路径
+- QQ 官方机器人使用原生 Markdown；OneBot 与其他平台使用单张 HTML 信息卡主路径
 
-> HTML 用户卡中的双栏表格由 AstrBot 渲染为单张图片，避免 QQ 客户端直接解析“表格内图片”时出现错位；渲染服务不可用时仍会回退到 Markdown 资料字段。
+> OneBot 等非官机平台的 HTML 用户卡由 AstrBot 渲染为单张图片；QQ 官方机器人则始终使用原生 Markdown 表格。
 
 ### v1.7.0（2026-08-26）
 
