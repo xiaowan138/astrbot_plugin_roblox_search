@@ -24,9 +24,9 @@
     },
     "qq_markdown_image_proxy": {
         "type": "string",
-        "description": "QQ 官方 Markdown 外链图片代理。默认 images.weserv.nl，用于提高 Roblox CDN 头像、虚拟形象和游戏封面在 QQ 客户端的显示成功率；留空则直接使用 Roblox CDN URL。",
-        "hint": "例：https://images.weserv.nl/；留空禁用代理",
-        "default": "https://images.weserv.nl/"
+        "description": "QQ 官方 Markdown 外链图片代理。默认 wsrv.nl，用于提高 Roblox CDN 头像、虚拟形象和游戏封面在 QQ 客户端的显示成功率；留空则直接使用 Roblox CDN URL。",
+        "hint": "例：https://wsrv.nl/；留空禁用代理",
+        "default": "https://wsrv.nl/"
     },
     "query_cooldown": {
         "type": "int",

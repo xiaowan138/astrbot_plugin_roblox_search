@@ -331,7 +331,7 @@ class RobloxSearchPlugin(Star):
         set_base_domain(str(config.get("api_base_domain", "") or ""))
         # QQ Markdown 外链图片代理；留空时直接使用 Roblox CDN URL。
         self.qq_markdown_image_proxy = str(
-            config.get("qq_markdown_image_proxy", "https://images.weserv.nl/") or ""
+            config.get("qq_markdown_image_proxy", "https://wsrv.nl/") or ""
         ).strip()
         # 查询冷却：同一群内同一用户两次查询的最小间隔秒数，0 = 不限制
         try:
@@ -534,6 +534,9 @@ class RobloxSearchPlugin(Star):
             return ""
         display_url = url
         proxy = self.qq_markdown_image_proxy.rstrip("/")
+        # 国内网络环境下 wsrv.nl 通常比 images.weserv.nl 更容易被 QQ 拉取。
+        if proxy.lower() == "https://images.weserv.nl":
+            proxy = "https://wsrv.nl"
         parsed = urlsplit(url)
         if proxy and parsed.hostname and parsed.hostname.endswith("rbxcdn.com"):
             # 按 QQ 官方 Markdown 常见兼容写法，仅编码代理参数中的特殊字符，

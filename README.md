@@ -78,7 +78,7 @@
 - **`api_base_domain`**（数据源代理域名，默认 `rotunnel.com`）
   - 只填域名本身，不带 `https://` 和路径；
   - 默认代理不可用时可换 `roproxy.com` 或自建反代域名，无需改代码。
-- **`qq_markdown_image_proxy`**（QQ 官方 Markdown 图片代理，默认 `https://images.weserv.nl/`）
+- **`qq_markdown_image_proxy`**（QQ 官方 Markdown 图片代理，默认 `https://wsrv.nl/`）
   - 官机 Markdown 里的 Roblox CDN 图片偶尔无法被 QQ 拉取，默认经图片代理转换为 PNG；
   - 留空则直接使用 Roblox CDN URL。若代理不可用但 QQ 可以直接显示 Roblox 图片，可设为空。
 - **`query_cooldown`**（查询冷却秒数，默认 `5`，`0` = 不限制）
@@ -92,7 +92,7 @@
 - QQ 官方机器人保持原生 Markdown 输出，头像与 3D 虚拟形象使用双栏表格嵌入
 - OneBot 等非官机平台使用真正的 HTML 双栏表格并渲染为单张图片
 - 游戏资料标题下新增游戏封面 Markdown 图片，随后展示游戏统计、简介和 Roblox 链接
-- 默认通过 `images.weserv.nl` 代理 Roblox CDN 缩略图，提高 QQ 客户端显示成功率；可用 `qq_markdown_image_proxy` 配置切换或关闭
+- 默认通过 `wsrv.nl` 代理 Roblox CDN 缩略图，提高 QQ 客户端显示成功率；可用 `qq_markdown_image_proxy` 配置切换或关闭
 - QQ 官方机器人使用原生 Markdown；OneBot 与其他平台使用单张 HTML 信息卡主路径
 
 > OneBot 等非官机平台的 HTML 用户卡由 AstrBot 渲染为单张图片；QQ 官方机器人则始终使用原生 Markdown 表格。
