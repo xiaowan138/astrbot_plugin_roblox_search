@@ -6,7 +6,7 @@
 
 用户 · 游戏 · 群组 · 好友粉丝关注 · 官方徽章 一站式查询
 
-![Version](https://img.shields.io/badge/version-v1.7.0-blue)
+![Version](https://img.shields.io/badge/version-v1.8.0-blue)
 ![Status](https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E4%B8%AD-orange)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%E6%8F%92%E4%BB%B6-green)
 
@@ -22,7 +22,7 @@
 
 一个 AstrBot 平台的 Roblox 综合查询插件，在群里发一句话就能查：
 
-- **用户**：头像、3D 形象、在线状态、注册时长、好友/粉丝/关注数、官方徽章，统一输出为完整用户信息卡
+- **用户**：头像、3D 形象、在线状态、注册时长、好友/粉丝/关注数、官方徽章；官机使用带图片的原生 Markdown，OneBot 使用完整用户信息卡
 - **游戏**：详情、在线人数、访问量、点赞收藏（兼容地点ID / 游戏ID 两种查询方式）
 - **群组**：详情、成员数、职位列表、群主信息
 - **社交**：好友列表（自动补全用户名、支持翻页）
@@ -51,7 +51,7 @@
 
 所有命令也可不带 `/` 直接触发（如发送 `用户名搜索 Roblox`），可在配置中关闭。普通错误和参数提示使用纯文本；用户查询会按平台选择对应的输出方式。
 
-**平台兼容**：同时兼容 **QQ 官方机器人（官机）** 与 **OneBot**（NapCat / Lagrange / LLOneBot 等）以及 Telegram、Discord 等其他 AstrBot 支持的平台。默认 `auto` 按每条消息来源自动适配，多平台同时接入也无需切换配置：用户查询和游戏查询默认都生成并发送**一张完整信息卡图片**——用户卡将头像、3D 虚拟形象和资料排版在一起；游戏卡将封面、统计和简介排版在一起。HTML 生图不可用时，才会按平台回退到既有的官机图片+Markdown或 OneBot 图文链。
+**平台兼容**：同时兼容 **QQ 官方机器人（官机）** 与 **OneBot**（NapCat / Lagrange / LLOneBot 等）以及 Telegram、Discord 等其他 AstrBot 支持的平台。默认 `auto` 按每条消息来源自动适配：官机用户查询使用一条原生 Markdown，其中以外链图片嵌入头像和 3D 虚拟形象；官机游戏查询以外链图片嵌入游戏封面。OneBot 用户和游戏查询继续使用单张 HTML 信息卡。官机 Markdown 不会加入 AstrBot `Image` 组件，因此能保持 QQ 原生 Markdown（`msg_type=2`）而不降级为媒体消息。
 
 ## 安装
 
@@ -74,14 +74,28 @@
 - **`platform_type`**（平台类型，默认 `auto`）
   - `auto`：**按每条消息的来源平台自动识别**（推荐），同一个 AstrBot 同时接入 QQ 官方机器人 + OneBot 也无需手动切换，两边各自适配；
   - `onebot`：手动指定 OneBot（NapCat / Lagrange 等），用户查询同时发头像框 + 形象图两张图；
-  - `qq_official`：手动指定 QQ 官方机器人。用户与游戏查询默认均发送一张完整信息卡图片；并省略「正在查询...」中间提示（官方对消息条数/频率有限制）。HTML 生图失败时才回退为图片与原生 Markdown 分开发送。
+  - `qq_official`：手动指定 QQ 官方机器人。用户查询以原生 Markdown 的实验性双栏表格嵌入头像和虚拟形象；游戏查询以原生 Markdown 嵌入游戏封面；并省略「正在查询...」中间提示。图片通过 URL 文字写入 Markdown，不会触发富媒体降级。
 - **`api_base_domain`**（数据源代理域名，默认 `rotunnel.com`）
   - 只填域名本身，不带 `https://` 和路径；
   - 默认代理不可用时可换 `roproxy.com` 或自建反代域名，无需改代码。
+- **`qq_markdown_image_proxy`**（QQ 官方 Markdown 图片代理，默认 `https://images.weserv.nl/`）
+  - 官机 Markdown 里的 Roblox CDN 图片偶尔无法被 QQ 拉取，默认经图片代理转换为 PNG；
+  - 留空则直接使用 Roblox CDN URL。若代理不可用但 QQ 可以直接显示 Roblox 图片，可设为空。
 - **`query_cooldown`**（查询冷却秒数，默认 `5`，`0` = 不限制）
   - 同一群内同一用户两次查询的最小间隔，防止刷屏与触发接口限流（429）。
 
 ## 更新日志
+
+### v1.8.0（2026-08-26）
+
+**官机原生 Markdown 图文输出：**
+- 纠正 v1.7.0：QQ 官方机器人不再将用户/游戏查询主路径改为 HTML 图片卡，而是恢复为原生 Markdown（`msg_type=2`）
+- 用户资料标题下新增实验性双栏表格：以 QQ Markdown 外链图片语法并排嵌入头像与 3D 虚拟形象，随后展示资料字段、简介和群组列表
+- 游戏资料标题下新增游戏封面 Markdown 图片，随后展示游戏统计、简介和 Roblox 链接
+- 默认通过 `images.weserv.nl` 代理 Roblox CDN 缩略图，提高 QQ 客户端显示成功率；可用 `qq_markdown_image_proxy` 配置切换或关闭
+- OneBot 与其他非官机平台保持 v1.7 的单张 HTML 信息卡主路径
+
+> 用户双栏表格属于实验性布局：QQ 手机端对“表格内图片”可能无法可靠并排显示；即使图片或表格渲染失败，Markdown 资料字段仍会正常显示。
 
 ### v1.7.0（2026-08-26）
 

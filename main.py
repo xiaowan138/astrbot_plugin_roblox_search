@@ -29,6 +29,7 @@ import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
+from urllib.parse import quote, urlsplit
 
 from dateutil.relativedelta import relativedelta
 
@@ -195,6 +196,27 @@ def _escape_qq_markdown(value) -> str:
     return "".join(f"\\{char}" if char in escaped else char for char in text)
 
 
+def _is_safe_markdown_image_url(url: str) -> bool:
+    """仅允许可由 QQ 服务端拉取的公网 HTTPS 图片 URL。"""
+    if not url or any(ord(char) < 32 for char in url):
+        return False
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host or any(char.isspace() for char in url):
+        return False
+    blocked_hosts = {"localhost", "::1", "0.0.0.0"}
+    if host in blocked_hosts or host.startswith(("127.", "10.", "192.168.", "169.254.")):
+        return False
+    if host.startswith("172."):
+        parts = host.split(".")
+        if len(parts) > 1 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return False
+    return True
+
+
 def _build_qq_user_markdown(
     raw_name: str,
     display_name: str,
@@ -210,10 +232,23 @@ def _build_qq_user_markdown(
     verified: bool | None,
     description: str,
     groups: list,
+    headshot_image: str = "",
+    avatar_image: str = "",
 ) -> str:
-    """构造 QQ 官方机器人原生 Markdown 用户资料，不包含媒体组件。"""
+    """构造 QQ 官方机器人原生 Markdown 用户资料。"""
     inline = lambda value: _escape_qq_markdown(value).replace("\n", " ")
-    lines = ["# Roblox 用户信息", f"**用户名：** `{inline(raw_name)}`"]
+    lines = ["# Roblox 用户信息"]
+    if headshot_image and avatar_image:
+        lines.extend([
+            "| 头像 | 虚拟形象 |",
+            "| :--: | :--: |",
+            f"| {headshot_image} | {avatar_image} |",
+        ])
+    elif headshot_image:
+        lines.append(headshot_image)
+    elif avatar_image:
+        lines.append(avatar_image)
+    lines.append(f"**用户名：** `{inline(raw_name)}`")
     if display_name and display_name != raw_name:
         lines.append(f"**展示名：** {inline(display_name)}")
     lines.extend([
@@ -294,6 +329,10 @@ class RobloxSearchPlugin(Star):
         self.platform_type = str(config.get("platform_type", "auto") or "auto").strip().lower()
         # 数据源代理域名（默认 rotunnel.com，可换 roproxy.com / 自建反代）
         set_base_domain(str(config.get("api_base_domain", "") or ""))
+        # QQ Markdown 外链图片代理；留空时直接使用 Roblox CDN URL。
+        self.qq_markdown_image_proxy = str(
+            config.get("qq_markdown_image_proxy", "https://images.weserv.nl/") or ""
+        ).strip()
         # 查询冷却：同一群内同一用户两次查询的最小间隔秒数，0 = 不限制
         try:
             self.cooldown = max(0, int(config.get("query_cooldown", 5) or 0))
@@ -387,6 +426,20 @@ class RobloxSearchPlugin(Star):
         """QQ 官方机器人原生 Markdown 输出；调用方不得混入 Image 等媒体组件。"""
         return event.plain_result(text).use_markdown(True)
 
+    def _qq_markdown_image(self, alt: str, url: str, width: int, height: int) -> str:
+        """构造 QQ 官方 Markdown 外链图片，不创建 Image 组件。"""
+        if not _is_safe_markdown_image_url(url):
+            return ""
+        display_url = url
+        proxy = self.qq_markdown_image_proxy.rstrip("/")
+        parsed = urlsplit(url)
+        if proxy and parsed.hostname and parsed.hostname.endswith("rbxcdn.com"):
+            display_url = f"{proxy}/?url={quote(url, safe='')}&w={width}&h={height}&fit=contain&output=png"
+        if not _is_safe_markdown_image_url(display_url):
+            return ""
+        safe_alt = _escape_qq_markdown(alt).replace("\n", " ")
+        return f"![{safe_alt} #{width}px #{height}px]({display_url})"
+
     def _chain(self, event: AstrMessageEvent, chain):
         """图文消息输出：强制关闭 Markdown 渲染（不影响图片发送）"""
         return event.chain_result(chain).use_markdown(False)
@@ -397,14 +450,17 @@ class RobloxSearchPlugin(Star):
         return str(value if value not in (None, "") else fallback)
 
     def _build_qq_game_markdown(self, game: dict) -> str:
-        """构造 QQ 官方机器人原生 Markdown 游戏资料，不包含媒体组件。"""
+        """构造 QQ 官方机器人原生 Markdown 游戏资料，封面以外链图片嵌入。"""
         inline = lambda value: _escape_qq_markdown(self._game_value(value)).replace("\n", " ")
         description = self._game_value(game.get("description"), "无描述")
         desc = _escape_qq_markdown(description[:500]).replace("\n", "  \n")
         if len(description) > 500:
             desc += "……"
-        lines = [
-            "# Roblox 游戏信息",
+        cover = self._qq_markdown_image("游戏封面", game.get("icon_url", ""), 420, 420)
+        lines = ["# Roblox 游戏信息"]
+        if cover:
+            lines.append(cover)
+        lines.extend([
             f"**游戏名：** {inline(game.get('name'))}",
             f"**开发者：** {inline(game.get('creator'))}",
             f"**Universe ID：** `{game.get('universe_id', 0)}`",
@@ -419,7 +475,7 @@ class RobloxSearchPlugin(Star):
             "## 游戏简介",
             desc,
             f"[在 Roblox 中打开](https://www.roblox.com/games/{game.get('place_id', 0)})",
-        ]
+        ])
         return _truncate("\n\n".join(lines))
 
     def _build_game_plain_text(self, game: dict, title: str) -> str:
@@ -453,7 +509,11 @@ class RobloxSearchPlugin(Star):
             return None
 
     async def _render_game_result(self, event: AstrMessageEvent, game: dict, title: str):
-        """优先输出单张游戏信息卡；失败时按平台分别回退。"""
+        """QQ 官方输出带封面的原生 Markdown，其他平台优先单张游戏卡。"""
+        if self._resolve_platform(event) == "qq_official":
+            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
+            return
+
         template_game = {
             "image_url": html.escape(game["icon_url"], quote=True),
             "name": html.escape(game["name"]),
@@ -590,7 +650,7 @@ class RobloxSearchPlugin(Star):
             friend_count = _safe(2, None)
             follower_count = _safe(3, None)
             following_count = _safe(4, None)
-            # 主路径为单张 HTML 信息卡，所有平台都需要头像框和 3D 虚拟形象。
+            # 官机 Markdown 与 OneBot HTML 卡都需要头像框和 3D 虚拟形象 URL。
             avatar_result, headshot_result = await asyncio.gather(
                 get_avatar_url(user_id),
                 get_headshot_url(user_id),
@@ -615,6 +675,30 @@ class RobloxSearchPlugin(Star):
                 role = group.get("role", {}).get("name", "未知")
                 gid = group.get("group", {}).get("id", 0)
                 return f"{group_name}（职位：{role}，ID：{gid}）"
+
+            if platform == "qq_official":
+                headshot_image = self._qq_markdown_image("头像", headshot_url, 180, 180)
+                avatar_image = self._qq_markdown_image("虚拟形象", avatar_url, 300, 300)
+                markdown = _build_qq_user_markdown(
+                    raw_name=raw_name,
+                    display_name=display_name,
+                    user_id=user_id,
+                    created_date=created_date,
+                    age_info=age_info,
+                    friend_count=friend_text,
+                    follower_count=follower_text,
+                    following_count=following_text,
+                    online_status=online_status,
+                    location=location,
+                    is_banned=is_banned,
+                    verified=verified,
+                    description=description,
+                    groups=groups,
+                    headshot_image=headshot_image,
+                    avatar_image=avatar_image,
+                )
+                yield self._qq_markdown(event, markdown)
+                return
 
             name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
             user_card = {

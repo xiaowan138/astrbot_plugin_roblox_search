@@ -2,7 +2,7 @@ plugin_name: astrbot_plugin_roblox_search
 name: astrbot_plugin_roblox_search
 desc: Roblox 平台综合查询工具（开发中），支持用户/游戏/群组查询、好友列表、官方徽章、在线状态等
 author: MrMao（原插件作者）· AstrBot 迁移版
-version: v1.7.0
+version: v1.8.0
 repo: https://github.com/xiaowan138/astrbot_plugin_roblox_search
 type: application
 display_name: Roblox 全功能查询插件（开发中）

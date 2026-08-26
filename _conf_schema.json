@@ -12,7 +12,7 @@
     },
     "platform_type": {
         "type": "string",
-        "description": "机器人平台类型（影响图片与消息发送策略）。auto（推荐）按每条消息的来源平台自动识别，同一 AstrBot 同时接入 QQ 官方机器人 + OneBot（NapCat/Lagrange 等）也无需切换；onebot / qq_official 为手动指定。所有平台的用户/游戏查询默认发送一张完整 HTML 信息卡图片；QQ 官方平台会省略“正在查询...”中间提示。HTML 生图失败时才按平台回退。",
+        "description": "机器人平台类型（影响图片与消息发送策略）。auto（推荐）按每条消息的来源平台自动识别，同一 AstrBot 同时接入 QQ 官方机器人 + OneBot（NapCat/Lagrange 等）也无需切换；onebot / qq_official 为手动指定。QQ 官方平台的用户/游戏查询发送带外链图片的原生 Markdown；OneBot 等非官机平台发送 HTML 信息卡图片。QQ 官方平台会省略“正在查询...”中间提示。",
         "hint": "可选值：auto（默认，推荐）/ onebot / qq_official",
         "default": "auto"
     },
@@ -21,6 +21,12 @@
         "description": "数据源代理域名（只填域名本身，不带 https:// 和路径）。默认 rotunnel.com；代理不可用时可换 roproxy.com 或自建反代域名。留空 = 使用默认值。",
         "hint": "例：rotunnel.com / roproxy.com",
         "default": "rotunnel.com"
+    },
+    "qq_markdown_image_proxy": {
+        "type": "string",
+        "description": "QQ 官方 Markdown 外链图片代理。默认 images.weserv.nl，用于提高 Roblox CDN 头像、虚拟形象和游戏封面在 QQ 客户端的显示成功率；留空则直接使用 Roblox CDN URL。",
+        "hint": "例：https://images.weserv.nl/；留空禁用代理",
+        "default": "https://images.weserv.nl/"
     },
     "query_cooldown": {
         "type": "int",
