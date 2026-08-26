@@ -3,7 +3,7 @@ main.py —— Roblox 全功能查询插件（AstrBot 版）
 
 由 NoneBot2 插件 nonebot_plugin_roblox_search (v1.3.5) 迁移并增强而来。
 在保留原插件全部查询功能的基础上：
-- 重新设计了输出格式：用户/游戏查询优先生成单张完整信息卡，兼容 OneBot 与 QQ 官方机器人
+- 重新设计了输出格式：QQ 官方机器人用户/游戏查询使用原生 Markdown，OneBot 等平台使用信息卡
 - 修复原插件 bug：群组/游戏名搜索未做 URL 编码（中文/空格关键词会失败）、
   游戏 ID 查询不兼容 universeId、同步 requests 阻塞事件循环等
 - 增强：认证徽章、OMNI 游戏搜索、游戏点赞/类型、群主ID、搜索结果候选提示、长度保护
@@ -421,9 +421,110 @@ class RobloxSearchPlugin(Star):
         """纯文本输出：强制关闭 Markdown 渲染，避免动态内容里的 # * | 等被平台解析"""
         return event.plain_result(text).use_markdown(False)
 
-    def _qq_markdown(self, event: AstrMessageEvent, text: str):
-        """QQ 官方机器人原生 Markdown 输出；调用方不得混入 Image 等媒体组件。"""
+    async def _qq_markdown(self, event: AstrMessageEvent, text: str):
+        """通过 botpy 官方接口发送 msg_type=2 Markdown；失败时回退 AstrBot 消息链。"""
+        if await self._send_qq_native_markdown(event, text):
+            return None
         return event.plain_result(text).use_markdown(True)
+
+    async def _send_qq_native_markdown(self, event: AstrMessageEvent, text: str) -> bool:
+        """调用 QQ 官方机器人 post_group_message/post_c2c_message 发送原生 Markdown。"""
+        try:
+            platform_id = ""
+            getter = getattr(event, "get_platform_id", None)
+            if callable(getter):
+                platform_id = str(getter() or "")
+            if not platform_id:
+                platform_id = str(
+                    getattr(event, "platform_id", "")
+                    or getattr(event, "platform_name", "")
+                    or ""
+                )
+            platform = self.context.get_platform_inst(platform_id) if platform_id else None
+            client_getter = getattr(platform, "get_client", None)
+            if not callable(client_getter):
+                return False
+
+            from botpy.types.message import MarkdownPayload
+
+            client = client_getter()
+            group_id = self._qq_event_value(event, ("group_openid", "group_id", "guild_id", "channel_id"))
+            sender_id = self._qq_event_value(
+                event, ("member_openid", "user_openid", "openid", "user_id", "sender_id", "author_id")
+            )
+            message_id = self._qq_event_value(event, ("message_id", "msg_id", "event_id"))
+            payload = MarkdownPayload(content=text)
+            if group_id:
+                await client.api.post_group_message(
+                    group_openid=group_id,
+                    msg_type=2,
+                    markdown=payload,
+                    msg_id=message_id or None,
+                    msg_seq=1,
+                )
+            elif sender_id:
+                await client.api.post_c2c_message(
+                    openid=sender_id,
+                    msg_type=2,
+                    markdown=payload,
+                    msg_id=message_id or None,
+                    msg_seq=1,
+                )
+            else:
+                return False
+            return True
+        except Exception as exc:
+            logger.warning("[Roblox] QQ 原生 Markdown 发送失败，回退 AstrBot 消息链: %s", exc)
+            return False
+
+    @staticmethod
+    def _qq_event_value(event: AstrMessageEvent, keys: tuple[str, ...]) -> str:
+        """从 AstrBot 事件及 QQ 原始消息的常见层级读取 OpenID/消息 ID。"""
+        if "group_openid" in keys:
+            getter = getattr(event, "get_group_id", None)
+            if callable(getter):
+                value = getter()
+                if value:
+                    return str(value)
+        if "openid" in keys:
+            getter = getattr(event, "get_sender_id", None)
+            if callable(getter):
+                value = getter()
+                if value:
+                    return str(value)
+        message_obj = getattr(event, "message_obj", None)
+        raw_message = getattr(message_obj, "raw_message", None)
+        sources = (
+            event,
+            message_obj,
+            getattr(message_obj, "sender", None),
+            raw_message,
+            getattr(raw_message, "raw_data", None),
+        )
+        for source in sources:
+            if isinstance(source, dict):
+                nested_sources = (source, source.get("author"), source.get("sender"), source.get("member"))
+                for nested in nested_sources:
+                    if not isinstance(nested, dict):
+                        continue
+                    for key in keys:
+                        value = nested.get(key)
+                        if value:
+                            return str(value)
+            elif source is not None:
+                for key in keys:
+                    value = getattr(source, key, "")
+                    if value:
+                        return str(value)
+                for attr in ("author", "sender", "member"):
+                    nested = getattr(source, attr, None)
+                    if nested is None:
+                        continue
+                    for key in keys:
+                        value = getattr(nested, key, "")
+                        if value:
+                            return str(value)
+        return ""
 
     def _qq_markdown_image(self, alt: str, url: str, width: int, height: int) -> str:
         """构造 QQ 官方 Markdown 外链图片，不创建 Image 组件。"""
@@ -510,7 +611,9 @@ class RobloxSearchPlugin(Star):
     async def _render_game_result(self, event: AstrMessageEvent, game: dict, title: str):
         """QQ 官方输出带封面的原生 Markdown，其他平台优先单张游戏卡。"""
         if self._resolve_platform(event) == "qq_official":
-            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
+            result = await self._qq_markdown(event, self._build_qq_game_markdown(game))
+            if result is not None:
+                yield result
             return
 
         template_game = {
@@ -537,7 +640,9 @@ class RobloxSearchPlugin(Star):
         if self._resolve_platform(event) == "qq_official":
             if icon_path:
                 yield self._chain(event, [Image.fromFileSystem(icon_path)])
-            yield self._qq_markdown(event, self._build_qq_game_markdown(game))
+            result = await self._qq_markdown(event, self._build_qq_game_markdown(game))
+            if result is not None:
+                yield result
             return
 
         chain = []
@@ -615,7 +720,7 @@ class RobloxSearchPlugin(Star):
     async def _user_query(self, event: AstrMessageEvent, user_id: int, source: str):
         """用户详情查询（用户名搜索 / 用户ID搜索共用）。
 
-        用户资料主路径输出单张信息卡，因此不额外发送进度消息。
+        QQ 官方机器人用户资料走原生 Markdown，其他平台走信息卡，因此不额外发送进度消息。
         """
         total_start = time.time()
         try:
@@ -697,7 +802,9 @@ class RobloxSearchPlugin(Star):
                     headshot_image=headshot_image,
                     avatar_image=avatar_image,
                 )
-                yield self._qq_markdown(event, markdown)
+                result = await self._qq_markdown(event, markdown)
+                if result is not None:
+                    yield result
                 return
 
             name_line = raw_name if display_name == raw_name else f"{display_name}（@{raw_name}）"
