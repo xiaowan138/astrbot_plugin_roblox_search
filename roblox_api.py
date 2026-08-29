@@ -449,14 +449,19 @@ async def get_game_info_by_universe(universe_id: int, retries: int = MAX_RETRIES
     return await http_get(url, retries=retries)
 
 
-async def get_game_info(place_id: int, retries: int = MAX_RETRIES):
-    """按地点ID获取游戏详情。
+async def get_universe_id_by_place(place_id: int) -> int | None:
+    """通过地点ID查询所属游戏ID(universeId)；失败返回 None。
 
-    注意：当前代理对 placeIds 参数支持不稳定（400/504），调用方应同时尝试
-    get_game_info_by_universe 并取有数据的结果。
+    games?placeIds 参数在代理上已 400，用该转换接口恢复地点ID查询支持。
     """
-    url = f"https://games.{_BASE_DOMAIN}/v1/games?placeIds={place_id}"
-    return await http_get(url, retries=retries)
+    url = f"https://apis.{_BASE_DOMAIN}/universes/v1/places/{place_id}/universe"
+    try:
+        data = await http_get(url, retries=1, timeout=SEARCH_TIMEOUT)
+        if isinstance(data, dict) and data.get("universeId"):
+            return int(data["universeId"])
+    except Exception:
+        pass
+    return None
 
 
 async def get_game_votes(universe_id: int):

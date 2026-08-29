@@ -99,6 +99,10 @@ h1 { margin: 0 0 14px; font-size: 34px; line-height: 1.25; }
 .stat { padding: 16px; border: 1px solid rgba(255,255,255,.11); border-radius: 16px; background: rgba(255,255,255,.05); }
 .label { color: #94a3b8; font-size: 13px; }
 .value { margin-top: 7px; font-size: 21px; font-weight: 700; }
+.substat { margin-top: 5px; color: #94a3b8; font-size: 13px; }
+.candidates { margin: 0 28px 24px; padding: 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; background: rgba(15,23,42,.45); }
+.candidates h2 { margin: 0 0 10px; font-size: 19px; }
+.candidates ul { margin: 0; padding-left: 22px; color: #e2e8f0; line-height: 1.9; }
 .footer { padding: 0 28px 28px; color: #94a3b8; font-size: 13px; line-height: 1.6; }
 </style>
 </head>
@@ -121,10 +125,13 @@ h1 { margin: 0 0 14px; font-size: 34px; line-height: 1.25; }
     <div class=\"stat\"><div class=\"label\">当前游玩</div><div class=\"value\">{{ game.playing }}</div></div>
     <div class=\"stat\"><div class=\"label\">总访问量</div><div class=\"value\">{{ game.visits }}</div></div>
     <div class=\"stat\"><div class=\"label\">收藏数</div><div class=\"value\">{{ game.favorites }}</div></div>
-    <div class=\"stat\"><div class=\"label\">点赞数</div><div class=\"value\">{{ game.likes }}</div></div>
+    <div class=\"stat\"><div class=\"label\">好评率</div><div class=\"value\">{{ game.rating }}</div><div class=\"substat\">赞 {{ game.likes }} ｜ 踩 {{ game.dislikes }}</div></div>
     <div class=\"stat\"><div class=\"label\">创建时间</div><div class=\"value\">{{ game.created }}</div></div>
     <div class=\"stat\"><div class=\"label\">更新时间</div><div class=\"value\">{{ game.updated }}</div></div>
   </section>
+  {% if game.more_candidates %}
+  <section class=\"candidates\"><h2>其他候选</h2><ul>{% for cand in game.more_candidates %}<li>{{ cand }}</li>{% endfor %}</ul></section>
+  {% endif %}
   <div class=\"footer\">Roblox 链接：https://www.roblox.com/games/{{ game.place_id }}</div>
 </div>
 </body>
@@ -237,7 +244,8 @@ def _render_menu_sync() -> bytes:
 
     content_width = 600
     padding = 40
-    line_height = font.getbbox("A")[3] - font.getbbox("A")[1] + 8
+    # 用中文字符测量行高：命令行是中英混合，全角字符实际渲染高度高于拉丁字符
+    line_height = font.getbbox("中")[3] - font.getbbox("中")[1] + 8
 
     menu_items = [
         ("用户查询", [
@@ -257,6 +265,12 @@ def _render_menu_sync() -> bytes:
             ("/获取粉丝列表 [ID] [页码]", "读取用户粉丝（每页10个）"),
             ("/获取关注列表 [ID] [页码]", "读取用户关注（每页10个）"),
             ("/获取徽章列表 [用户ID]", "读取用户获得的官方徽章"),
+        ]),
+        ("账号绑定", [
+            ("/绑定 [用户名]", "简介验证码绑定 / 复查验证"),
+            ("/绑定ID [数字ID]", "按用户ID生成绑定验证码"),
+            ("/解绑", "解除当前账号绑定"),
+            ("/查询", "查询已绑定的 Roblox 账号"),
         ]),
     ]
 

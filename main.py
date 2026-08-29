@@ -55,13 +55,13 @@ from .roblox_api import (
     get_friend_count,
     get_friends,
     get_game_icon,
-    get_game_info,
     get_game_info_by_universe,
     get_game_votes,
     get_group_icon,
     get_group_info,
     get_group_roles,
     get_headshot_url,
+    get_universe_id_by_place,
     get_user_badges,
     get_user_details,
     get_user_groups,
@@ -363,6 +363,8 @@ class RobloxSearchPlugin(Star):
             "获取关注列表": self.followings_list,
             "获取徽章列表": self.badges_list,
         }
+        # 无斜杠触发时需要整词匹配的短命令，防止“查询一下天气”等日常消息误触
+        self._EXACT_MATCH_KEYWORDS = {"绑定", "解绑", "查询"}
         if self.whitelist:
             logger.info(f"[Roblox全功能查询] 已加载群白名单: {self.whitelist}（仅白名单群可用查询功能）")
         else:
@@ -591,7 +593,7 @@ class RobloxSearchPlugin(Star):
             f"**当前游玩：** `{game.get('playing', 0):,}`",
             f"**总访问量：** `{game.get('visits', 0):,}`",
             f"**收藏数：** `{game.get('favorites', 0):,}`",
-            f"**点赞数：** `{game.get('likes', 0):,}`",
+            f"**好评率：** {inline(game.get('rating', '暂无'))}（赞 `{game.get('likes', 0):,}` / 踩 `{game.get('dislikes', 0):,}`）",
             f"**类型：** {inline(game.get('genre'))}",
             f"**创建时间：** `{game.get('created', '未知')}`",
             f"**更新时间：** `{game.get('updated', '未知')}`",
@@ -599,6 +601,12 @@ class RobloxSearchPlugin(Star):
             desc,
             f"[在 Roblox 中打开](https://www.roblox.com/games/{game.get('place_id', 0)})",
         ])
+        for cand in game.get("more_candidates") or []:
+            lines.append(
+                f"- {inline(cand.get('name'))}（ID：`{cand.get('universe_id', 0)}`，在线 `{cand.get('playing', 0):,}`）"
+            )
+        if game.get("more_candidates"):
+            lines.append("发送 /游戏ID搜索 [ID] 查看其他候选详情")
         return _truncate("\n\n".join(lines))
 
     def _build_game_plain_text(self, game: dict, title: str) -> str:
@@ -611,11 +619,17 @@ class RobloxSearchPlugin(Star):
         output += f"当前游玩：{game['playing']:,}\n"
         output += f"总访问量：{game['visits']:,}\n"
         output += f"收藏数：{game['favorites']:,}\n"
-        output += f"点赞数：{game['likes']:,}\n"
+        output += f"好评率：{game['rating']}（赞 {game['likes']:,} / 踩 {game['dislikes']:,}）\n"
         output += f"类型：{game['genre']}\n"
         output += f"创建时间：{game['created']}\n"
         output += f"更新时间：{game['updated']}\n"
         output += f"\n【游戏描述】\n{game['description'][:300]}{'......' if len(game['description']) > 300 else ''}"
+        more = game.get("more_candidates") or []
+        if more:
+            output += "\n\n【其他候选】\n"
+            for cand in more:
+                output += f"· {cand['name']}（ID：{cand['universe_id']}，在线 {cand['playing']:,}）\n"
+            output += "发送 /游戏ID搜索 [ID] 查看详情"
         return _truncate(output)
 
     async def _render_html_card(self, template: str, data: dict) -> str | None:
@@ -651,8 +665,16 @@ class RobloxSearchPlugin(Star):
             "visits": f"{game['visits']:,}",
             "favorites": f"{game['favorites']:,}",
             "likes": f"{game['likes']:,}",
+            "dislikes": f"{game['dislikes']:,}",
+            "rating": html.escape(game["rating"]),
             "created": game["created"],
             "updated": game["updated"],
+            "more_candidates": [
+                html.escape(
+                    f"{c['name']}（ID：{c['universe_id']}，在线 {c['playing']:,}）"
+                )
+                for c in game.get("more_candidates") or []
+            ],
         }
         image_url = await self._render_html_card(GAME_CARD_TEMPLATE, {"game": template_game})
         if image_url:
@@ -660,14 +682,6 @@ class RobloxSearchPlugin(Star):
             return
 
         icon_path = await _download_to_temp(game["icon_url"]) if game["icon_url"] else None
-        if self._resolve_platform(event) == "qq_official":
-            if icon_path:
-                yield self._chain(event, [Image.fromFileSystem(icon_path)])
-            result = await self._qq_markdown(event, self._build_qq_game_markdown(game))
-            if result is not None:
-                yield result
-            return
-
         chain = []
         if icon_path:
             chain.append(Image.fromFileSystem(icon_path))
@@ -678,6 +692,10 @@ class RobloxSearchPlugin(Star):
         """标准化游戏字段，供官机 Markdown、OneBot 卡片和回退文本共用。"""
         creator = detail.get("creator", {}) or {}
         votes = votes or {}
+        up_votes = int(votes.get("upVotes", detail.get("likes", 0)) or 0)
+        down_votes = int(votes.get("downVotes", 0) or 0)
+        total_votes = up_votes + down_votes
+        rating = f"{up_votes * 100 // total_votes}%" if total_votes > 0 else "暂无"
         return {
             "name": self._game_value(detail.get("name")),
             "universe_id": int(detail.get("id") or universe_id),
@@ -686,7 +704,9 @@ class RobloxSearchPlugin(Star):
             "playing": int(detail.get("playing", 0) or 0),
             "visits": int(detail.get("visits", 0) or 0),
             "favorites": int(detail.get("favorites", 0) or 0),
-            "likes": int(votes.get("upVotes", detail.get("likes", 0)) or 0),
+            "likes": up_votes,
+            "dislikes": down_votes,
+            "rating": rating,
             "genre": self._game_value(detail.get("genre")),
             "created": _fmt_date(_parse_date(detail.get("created", ""))),
             "updated": _fmt_date(_parse_date(detail.get("updated", ""))),
@@ -748,7 +768,7 @@ class RobloxSearchPlugin(Star):
         if not account:
             pending = await self.get_kv_data(self._pending_binding_key(event), None)
             if isinstance(pending, dict):
-                ok, message = await self._verify_binding(event)
+                _, message = await self._verify_binding(event)
                 yield self._plain(event, message)
             else:
                 yield self._plain(event, "用法：/绑定 用户名；完成简介验证后再次发送 /绑定。")
@@ -823,7 +843,9 @@ class RobloxSearchPlugin(Star):
                 await asyncio.sleep(2)
         if last_error and not details:
             return False, f"检测 Roblox 简介失败：{last_error}"
-        if not details or challenge not in str(details.get("description") or ""):
+        if not details:
+            return False, "无法读取该 Roblox 账号的资料（账号可能不存在或已注销），请重新使用 /绑定。"
+        if challenge not in str(details.get("description") or ""):
             return False, "尚未在 Roblox 简介中检测到验证码，请确认已保存后再发送 /绑定。"
         binding = {
             "user_id": user_id,
@@ -916,9 +938,11 @@ class RobloxSearchPlugin(Star):
     async def _user_query(self, event: AstrMessageEvent, user_id: int, source: str):
         """用户详情查询（用户名搜索 / 用户ID搜索共用）。
 
-        QQ 官方机器人用户资料走原生 Markdown，其他平台走信息卡，因此不额外发送进度消息。
+        QQ 官方机器人一条消息只能回一条，省略进度提示；其余平台保留提示改善体验。
         """
         total_start = time.time()
+        if self._show_progress(event):
+            yield self._plain(event, "正在查询用户资料，请稍候...")
         try:
             details = await get_user_details(user_id)
             if not details or not details.get("name"):
@@ -1226,6 +1250,8 @@ class RobloxSearchPlugin(Star):
         if not name:
             yield self._plain(event, "请输入游戏名，例：/游戏名搜索 Adopt Me")
             return
+        if self._show_progress(event):
+            yield self._plain(event, "正在搜索游戏，请稍候...")
         try:
             search_result = await search_game(name)
             games = search_result.get("data", []) if search_result else []
@@ -1256,11 +1282,37 @@ class RobloxSearchPlugin(Star):
             icon_url = "" if isinstance(icon_url, Exception) else (icon_url or "")
             votes = {} if isinstance(votes, Exception) else (votes or {})
             game_data = await self._build_game_data(game_detail, universe_id, icon_url, votes)
+            game_data["more_candidates"] = [
+                {
+                    "name": str(c.get("name") or "未知"),
+                    "universe_id": int(c.get("id") or 0),
+                    "playing": int(c.get("playerCount", 0) or 0),
+                }
+                for c in games[1:4]
+            ]
             async for result in self._render_game_result(event, game_data, "Roblox 游戏搜索"):
                 yield result
         except Exception as e:
             logger.error(traceback.format_exc())
             yield self._plain(event, f"查询失败：{str(e)}")
+
+    async def _resolve_game_detail(self, gid: int) -> tuple[dict, int] | None:
+        """把用户输入的游戏ID解析为游戏详情，兼容 Universe ID / 地点 ID。
+
+        优先按 universeId 直查；未命中时通过转换接口把 placeId 换算成
+        universeId 再查（games?placeIds 参数在代理上已 400）。
+        返回 (详情, universeId)；两种方式都查不到返回 None。
+        """
+        info = await get_game_info_by_universe(gid, retries=1)
+        if isinstance(info, dict) and info.get("data"):
+            detail = info["data"][0]
+            return detail, int(detail.get("id") or gid)
+        universe_id = await get_universe_id_by_place(gid)
+        if universe_id:
+            info = await get_game_info_by_universe(universe_id, retries=1)
+            if isinstance(info, dict) and info.get("data"):
+                return info["data"][0], universe_id
+        return None
 
     @filter.command("游戏ID搜索")
     async def game_id_search(self, event: AstrMessageEvent):
@@ -1274,25 +1326,14 @@ class RobloxSearchPlugin(Star):
             yield self._plain(event, "请输入有效的游戏ID（纯数字），例：/游戏ID搜索 292439477")
             return
         gid = int(gid_str)
+        if self._show_progress(event):
+            yield self._plain(event, "正在查询游戏信息，请稍候...")
         try:
-            # 兼容输入 placeId/universeId：优先按 universeId，失败后按 placeId 兜底。
-            uni_info, place_info = await asyncio.gather(
-                get_game_info_by_universe(gid, retries=1),
-                get_game_info(gid, retries=1),
-                return_exceptions=True,
-            )
-            errs = [r for r in (uni_info, place_info) if isinstance(r, RobloxAPIError)]
-            picked = next(
-                (r for r in (uni_info, place_info) if isinstance(r, dict) and r.get("data")),
-                None,
-            )
-            if not picked:
-                if errs:
-                    raise errs[0]
+            resolved = await self._resolve_game_detail(gid)
+            if not resolved:
                 yield self._plain(event, "未找到该游戏，请检查游戏ID是否正确！")
                 return
-            game_detail = picked["data"][0]
-            universe_id = int(game_detail.get("id") or gid)
+            game_detail, universe_id = resolved
             icon_url, votes = await asyncio.gather(
                 get_game_icon(universe_id),
                 get_game_votes(universe_id),
@@ -1417,11 +1458,17 @@ class RobloxSearchPlugin(Star):
             event.stop_event()
             return
         for kw, handler in self._no_slash_handlers.items():
-            if msg.startswith(kw):
-                async for res in handler(event):
-                    yield res
-                event.stop_event()
-                return
+            if kw in self._EXACT_MATCH_KEYWORDS:
+                # 短命令在日常聊天句首出现概率高（如“查询一下天气”），
+                # 要求整词匹配（消息即命令本身，或后跟空格参数）才触发
+                if not (msg == kw or msg.startswith(kw + " ")):
+                    continue
+            elif not msg.startswith(kw):
+                continue
+            async for res in handler(event):
+                yield res
+            event.stop_event()
+            return
 
     async def terminate(self):
         '''插件卸载/停用时关闭全局 httpx 客户端并清理临时文件'''
